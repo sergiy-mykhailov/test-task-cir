@@ -1,0 +1,47 @@
+name: test-task-cir
+
+networks:
+  cir-network:
+    driver: bridge
+
+services:
+  cir-service:
+    container_name: cir-service
+    build:
+      context: .
+      dockerfile: Dockerfile.local
+    depends_on:
+      - cir-database
+    env_file:
+      - .env
+    volumes:
+      - .:/usr/src/app
+      - ./node_modules:/usr/src/app/node_modules
+    restart: on-failure
+    stop_signal: SIGTERM
+    stop_grace_period: 30s
+    ports:
+      - "9000:9000"
+    hostname: cir.service
+    networks:
+      - cir-network
+    logging:
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  cir-database:
+    container_name: cir-database
+    image: postgres:17.5
+    restart: on-failure
+    command: postgres -c 'max_connections=200'
+    shm_size: 256mb
+    env_file:
+      - .env
+    volumes:
+      - ./db/cir-database:/var/lib/postgresql/data
+    ports:
+      - 5832:5432
+    hostname: cir.database
+    networks:
+      - cir-network

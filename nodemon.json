@@ -1,0 +1,9 @@
+{
+  "ignore": ["web/public/*", "tests/*", "migrations/*",  "seeds/*",   "tmp/*", "README*"],
+  "signal": "SIGTERM",
+  "legacyWatch": true,
+  "experimentalWorker": true,
+  "execMap": {
+    "js": "node --max-old-space-size=6000"
+  }
+}
