@@ -1,18 +1,9 @@
 import { Boom, boomify } from '@hapi/boom';
 import { DBError, ValidationError } from 'objection';
 import lodash from 'lodash';
+import { HttpStatusCode } from '../constants/http.js';
 
 const { get } = lodash;
-
-const HttpStatusCode = Object.freeze({
-  BadRequest: 400,
-  Unauthorized: 401,
-  Forbidden: 403,
-  NotFound: 404,
-  Conflict: 409,
-  UnprocessableEntity: 422,
-  InternalServerError: 500,
-});
 
 const DEFAULT_STATUS =  HttpStatusCode.InternalServerError;
 const DEFAULT_MESSAGE = 'Something went wrong :(';
