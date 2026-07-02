@@ -10,6 +10,14 @@ export class CapacityHandler extends DefaultHandler {
     });
   }
 
+  static async createFxRate(request, h) {
+    return CapacityHandler.withErrorHandler(request, h, async () => {
+      const response = await capacityService.createFxRate(request.payload);
+
+      return h.response(response).code(201);
+    });
+  }
+
   static async getCapacity(request, h) {
     return CapacityHandler.withErrorHandler(request, h, async () =>
       capacityService.getCapacity(request.params.programId));

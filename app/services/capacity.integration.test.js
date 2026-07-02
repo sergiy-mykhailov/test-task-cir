@@ -86,7 +86,7 @@ const nextProgramId = () => {
 };
 
 const cleanupDatabase = async () => {
-  await knex.raw('truncate table capacity_events, reservations, program_capacity_balances, programs restart identity cascade;');
+  await knex.raw('truncate table capacity_events, reservations, program_capacity_balances, programs, fx_rates restart identity cascade;');
 };
 
 const findProgram = (externalId) =>
@@ -112,6 +112,11 @@ const countEvents = async (programId, eventType) => {
 
   return row.count;
 };
+
+const findEvents = (programId, eventType) =>
+  knex('capacity_events')
+    .where({ programId, eventType })
+    .orderBy('id');
 
 beforeAll(async () => {
   initPG();
@@ -244,6 +249,124 @@ describe('CapacityService integration safety', () => {
       invoiceId: 'invoice-release',
       status: ReservationStatus.Released,
       releasedAmount: 250,
+    });
+  });
+
+  test('persists cross-currency reservation effects and releases the stored converted amount', async () => {
+    const service = createService();
+    const programExternalId = nextProgramId();
+
+    await service.createProgram({
+      externalId: programExternalId,
+      currency: 'USD',
+      totalLimit: 1000,
+    });
+    const fxRate = await service.createFxRate({
+      baseCurrency: 'EUR',
+      quoteCurrency: 'USD',
+      rate: 1.2,
+      effectiveAt: '2026-07-02T10:00:00.000Z',
+    });
+    const storedFxRate = await knex('fx_rates')
+      .where({ id: fxRate.id })
+      .first();
+
+    const reservationResult = await service.createReservation(programExternalId, {
+      invoiceId: 'invoice-eur',
+      amount: 125,
+      currency: 'EUR',
+    });
+    const program = await findProgram(programExternalId);
+    const balance = await findBalance(program.id);
+    const reservations = await findReservations(program.id);
+    const reservationEvents = await findEvents(program.id, CapacityEventType.ReservationCreated);
+
+    expect(reservationResult.reservation).toMatchObject({
+      invoiceId: 'invoice-eur',
+      invoiceAmount: 125,
+      invoiceCurrency: 'EUR',
+      amount: 150,
+      currency: 'USD',
+      fxRateId: fxRate.id,
+      status: ReservationStatus.Reserved,
+      releasedAmount: 0,
+    });
+    expect(reservationResult.capacity).toMatchObject({
+      currency: 'USD',
+      totalLimit: 1000,
+      reservedAmount: 150,
+      availableAmount: 850,
+    });
+    expect(storedFxRate).toMatchObject({
+      baseCurrency: 'EUR',
+      quoteCurrency: 'USD',
+      rate: 1.2,
+    });
+    expect(balance.reservedAmount).toBe(150);
+    expect(reservations).toHaveLength(1);
+    expect(reservations[0]).toMatchObject({
+      invoiceId: 'invoice-eur',
+      invoiceAmount: 125,
+      invoiceCurrency: 'EUR',
+      amount: 150,
+      currency: 'USD',
+      fxRateId: fxRate.id,
+      status: ReservationStatus.Reserved,
+      releasedAmount: 0,
+    });
+    expect(reservationEvents).toHaveLength(1);
+    expect(reservationEvents[0]).toMatchObject({
+      reservationId: reservations[0].id,
+      invoiceId: 'invoice-eur',
+      amount: 150,
+      currency: 'USD',
+    });
+
+    await service.createFxRate({
+      baseCurrency: 'EUR',
+      quoteCurrency: 'USD',
+      rate: 1.5,
+      effectiveAt: '2026-07-02T11:30:00.000Z',
+    });
+    const releaseResult = await service.releaseReservation(programExternalId, 'invoice-eur');
+    const afterReleaseBalance = await findBalance(program.id);
+    const releasedReservations = await findReservations(program.id);
+    const releaseEvents = await findEvents(program.id, CapacityEventType.ReservationReleased);
+
+    expect(releaseResult.reservation).toMatchObject({
+      invoiceId: 'invoice-eur',
+      invoiceAmount: 125,
+      invoiceCurrency: 'EUR',
+      amount: 150,
+      currency: 'USD',
+      fxRateId: fxRate.id,
+      status: ReservationStatus.Released,
+      releasedAmount: 150,
+    });
+    expect(releaseResult.capacity).toMatchObject({
+      currency: 'USD',
+      totalLimit: 1000,
+      reservedAmount: 0,
+      availableAmount: 1000,
+    });
+    expect(afterReleaseBalance.reservedAmount).toBe(0);
+    expect(releasedReservations).toHaveLength(1);
+    expect(releasedReservations[0]).toMatchObject({
+      invoiceId: 'invoice-eur',
+      invoiceAmount: 125,
+      invoiceCurrency: 'EUR',
+      amount: 150,
+      currency: 'USD',
+      fxRateId: fxRate.id,
+      status: ReservationStatus.Released,
+      releasedAmount: 150,
+    });
+    expect(releaseEvents).toHaveLength(1);
+    expect(releaseEvents[0]).toMatchObject({
+      reservationId: releasedReservations[0].id,
+      invoiceId: 'invoice-eur',
+      amount: 150,
+      currency: 'USD',
     });
   });
 

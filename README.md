@@ -7,6 +7,7 @@
 - A repayment fully releases the related reservation. Partial repayments and partial releases are out of scope for the initial implementation.
 - Duplicate API operations are handled through external invoice identifiers, reservation status checks, database constraints, and transactions.
 - Concurrent reservation and release operations are serialized on the program capacity balance row so accepted reservations cannot exceed the program limit.
+- FX rates are managed locally in the service.
 - Kafka integration may later deliver reservation and repayment events from the treasury system. Those events should reuse the same capacity domain operations as the API.
 
 ## Installation
@@ -57,6 +58,7 @@ docker-compose stop
 ## Capacity API
 
 - `POST /programs` creates a financing program with its initial capacity balance.
+- `POST /fx-rates` creates a locally managed FX rate.
 - `GET /programs/{programId}/capacity` returns total, reserved, and available capacity.
 - `POST /programs/{programId}/reservations` reserves capacity for an external invoice.
 - `POST /programs/{programId}/invoices/{invoiceId}/release` fully releases an existing reservation after repayment.

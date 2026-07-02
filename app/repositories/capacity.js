@@ -1,5 +1,6 @@
 import { transaction } from 'objection';
 import CapacityEvents from '../models/capacity-events.js';
+import FxRates from '../models/fx-rates.js';
 import ProgramCapacityBalances from '../models/program-capacity-balances.js';
 import Programs from '../models/programs.js';
 import Reservations from '../models/reservations.js';
@@ -10,11 +11,13 @@ export default class CapacityRepository {
     balancesModel = ProgramCapacityBalances,
     reservationsModel = Reservations,
     capacityEventsModel = CapacityEvents,
+    fxRatesModel = FxRates,
   } = {}) {
     this.programsModel = programsModel;
     this.balancesModel = balancesModel;
     this.reservationsModel = reservationsModel;
     this.capacityEventsModel = capacityEventsModel;
+    this.fxRatesModel = fxRatesModel;
   }
 
   withTransaction(callback) {
@@ -67,5 +70,22 @@ export default class CapacityRepository {
 
   createCapacityEvent(data, trx) {
     return this.capacityEventsModel.query(trx).insert(data).returning('*');
+  }
+
+  findFxRateByPairAndEffectiveAt(baseCurrency, quoteCurrency, effectiveAt, trx) {
+    return this.fxRatesModel.query(trx).findOne({ baseCurrency, quoteCurrency, effectiveAt });
+  }
+
+  findLatestFxRate(baseCurrency, quoteCurrency, effectiveAt, trx) {
+    return this.fxRatesModel.query(trx)
+      .where({ baseCurrency, quoteCurrency })
+      .where('effectiveAt', '<=', effectiveAt)
+      .orderBy('effectiveAt', 'desc')
+      .orderBy('id', 'desc')
+      .first();
+  }
+
+  createFxRate(data, trx) {
+    return this.fxRatesModel.query(trx).insert(data).returning('*');
   }
 }

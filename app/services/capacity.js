@@ -65,18 +65,54 @@ export default class CapacityService {
     });
   }
 
+  async createFxRate(payload) {
+    return this.repository.withTransaction(async (trx) => {
+      if (payload.baseCurrency === payload.quoteCurrency) {
+        throwError(
+          'FX rate currencies must differ',
+          HttpStatusCode.BadRequest,
+          { baseCurrency: payload.baseCurrency, quoteCurrency: payload.quoteCurrency },
+        );
+      }
+
+      const rate = this.#getValidatedAmount(payload.rate, 'rate');
+      const effectiveAt = toTimestamp(payload.effectiveAt);
+      const existingFxRate = await this.repository.findFxRateByPairAndEffectiveAt(
+        payload.baseCurrency,
+        payload.quoteCurrency,
+        effectiveAt,
+        trx,
+      );
+
+      if (existingFxRate) {
+        throwError(
+          'FX rate already exists for this currency pair and timestamp',
+          HttpStatusCode.Conflict,
+          {
+            baseCurrency: payload.baseCurrency,
+            quoteCurrency: payload.quoteCurrency,
+            effectiveAt,
+          },
+        );
+      }
+
+      const createdAt = toTimestamp(this.now());
+      const fxRate = await this.repository.createFxRate({
+        baseCurrency: payload.baseCurrency,
+        quoteCurrency: payload.quoteCurrency,
+        rate,
+        effectiveAt,
+        createdAt,
+      }, trx);
+
+      return this.#buildFxRateResponse(fxRate);
+    });
+  }
+
   async createReservation(programExternalId, payload) {
     return this.repository.withTransaction(async (trx) => {
       const { program, balance } = await this.getProgramState(programExternalId, trx, { lockBalance: true });
-      const amount = this.#getValidatedAmount(payload.amount);
-
-      if (payload.currency !== program.currency) {
-        throwError(
-          'Reservation currency must match program currency',
-          HttpStatusCode.UnprocessableEntity,
-          { programCurrency: program.currency, reservationCurrency: payload.currency },
-        );
-      }
+      const invoiceAmount = this.#getValidatedAmount(payload.amount);
 
       const existingReservation = await this.repository.findReservationByProgramAndInvoice(
         program.id,
@@ -92,6 +128,14 @@ export default class CapacityService {
         );
       }
 
+      const occurredAt = toTimestamp(this.now());
+      const { amount, fxRateId } = await this.#resolveReservationAmount({
+        program,
+        invoiceAmount,
+        invoiceCurrency: payload.currency,
+        occurredAt,
+        trx,
+      });
       const availableAmount = balance.totalLimit - balance.reservedAmount;
 
       if (amount > availableAmount) {
@@ -102,12 +146,14 @@ export default class CapacityService {
         );
       }
 
-      const occurredAt = toTimestamp(this.now());
       const reservation = await this.repository.createReservation({
         programId: program.id,
         invoiceId: payload.invoiceId,
+        invoiceAmount,
+        invoiceCurrency: payload.currency,
         amount,
-        currency: payload.currency,
+        currency: program.currency,
+        fxRateId,
         status: ReservationStatus.Reserved,
         releasedAmount: 0,
         reservedAt: occurredAt,
@@ -225,6 +271,40 @@ export default class CapacityService {
     return numericAmount;
   }
 
+  async #resolveReservationAmount({
+    program,
+    invoiceAmount,
+    invoiceCurrency,
+    occurredAt,
+    trx,
+  }) {
+    if (invoiceCurrency === program.currency) {
+      return {
+        amount: invoiceAmount,
+        fxRateId: null,
+      };
+    }
+
+    const fxRate = await this.repository.findLatestFxRate(invoiceCurrency, program.currency, occurredAt, trx);
+
+    if (!fxRate) {
+      throwError(
+        'No usable FX rate found for reservation currency',
+        HttpStatusCode.UnprocessableEntity,
+        { baseCurrency: invoiceCurrency, quoteCurrency: program.currency, effectiveAt: occurredAt },
+      );
+    }
+
+    return {
+      amount: this.#roundMoney(invoiceAmount * fxRate.rate),
+      fxRateId: fxRate.id,
+    };
+  }
+
+  #roundMoney(amount) {
+    return Math.round((amount + Number.EPSILON) * 100) / 100;
+  }
+
   #buildProgramResponse(program) {
     return {
       id: program.id,
@@ -251,14 +331,28 @@ export default class CapacityService {
       id: reservation.id,
       programId: program.externalId,
       invoiceId: reservation.invoiceId,
+      invoiceAmount: reservation.invoiceAmount ?? reservation.amount,
+      invoiceCurrency: reservation.invoiceCurrency ?? reservation.currency,
       amount: reservation.amount,
       currency: reservation.currency,
+      fxRateId: reservation.fxRateId ?? null,
       status: reservation.status,
       releasedAmount: reservation.releasedAmount,
       reservedAt: toTimestamp(reservation.reservedAt),
       releasedAt: toTimestamp(reservation.releasedAt),
       createdAt: toTimestamp(reservation.createdAt),
       updatedAt: toTimestamp(reservation.updatedAt),
+    };
+  }
+
+  #buildFxRateResponse(fxRate) {
+    return {
+      id: fxRate.id,
+      baseCurrency: fxRate.baseCurrency,
+      quoteCurrency: fxRate.quoteCurrency,
+      rate: fxRate.rate,
+      effectiveAt: toTimestamp(fxRate.effectiveAt),
+      createdAt: toTimestamp(fxRate.createdAt),
     };
   }
 }

@@ -11,11 +11,13 @@ class FakeCapacityRepository {
     programs = [{ id: 1, externalId: 'program-1', currency: 'USD' }],
     balances = [{ programId: 1, totalLimit: 1000, reservedAmount: 100, updatedAt: NOW }],
     reservations = [],
+    fxRates = [],
     failOnCreateCapacityEvent = false,
   } = {}) {
     this.programs = programs;
     this.balances = balances;
     this.reservations = reservations;
+    this.fxRates = fxRates;
     this.capacityEvents = [];
     this.failOnCreateCapacityEvent = failOnCreateCapacityEvent;
     this.lockedBalanceReads = [];
@@ -25,6 +27,8 @@ class FakeCapacityRepository {
       Math.max(max, program.id), 0) + 1;
     this.nextReservationId = reservations.reduce((max, reservation) =>
       Math.max(max, reservation.id), 0) + 1;
+    this.nextFxRateId = fxRates.reduce((max, fxRate) =>
+      Math.max(max, fxRate.id), 0) + 1;
   }
 
   async withTransaction(callback) {
@@ -150,6 +154,42 @@ class FakeCapacityRepository {
     return event;
   }
 
+  findFxRateByPairAndEffectiveAt(baseCurrency, quoteCurrency, effectiveAt) {
+    return this.fxRates.find((fxRate) =>
+      fxRate.baseCurrency === baseCurrency
+      && fxRate.quoteCurrency === quoteCurrency
+      && new Date(fxRate.effectiveAt).getTime() === new Date(effectiveAt).getTime());
+  }
+
+  findLatestFxRate(baseCurrency, quoteCurrency, effectiveAt) {
+    const effectiveAtTime = new Date(effectiveAt).getTime();
+
+    return this.fxRates
+      .filter((fxRate) =>
+        fxRate.baseCurrency === baseCurrency
+        && fxRate.quoteCurrency === quoteCurrency
+        && new Date(fxRate.effectiveAt).getTime() <= effectiveAtTime)
+      .sort((left, right) => {
+        const timeDiff = new Date(right.effectiveAt).getTime() - new Date(left.effectiveAt).getTime();
+
+        return timeDiff || right.id - left.id;
+      })[0];
+  }
+
+  createFxRate(data, trx) {
+    const fxRate = {
+      id: this.nextFxRateId,
+      ...data,
+    };
+    this.nextFxRateId += 1;
+    this.fxRates.push(fxRate);
+    trx?.undo.push(() => {
+      this.fxRates = this.fxRates.filter((item) => item.id !== fxRate.id);
+    });
+
+    return fxRate;
+  }
+
   async #acquireProgramLock(programId, trx) {
     // Model the program balance row lock so service tests expose unsafe concurrent capacity updates.
     const previous = this.programLocks.get(programId) || Promise.resolve();
@@ -218,6 +258,51 @@ describe('CapacityService', () => {
     });
   });
 
+  test('creates an FX rate', async () => {
+    const repository = new FakeCapacityRepository();
+    const service = createService(repository);
+
+    const result = await service.createFxRate({
+      baseCurrency: 'EUR',
+      quoteCurrency: 'USD',
+      rate: 1.2,
+      effectiveAt: '2026-07-02T10:00:00.000Z',
+    });
+
+    expect(result).toMatchObject({
+      id: 1,
+      baseCurrency: 'EUR',
+      quoteCurrency: 'USD',
+      rate: 1.2,
+      effectiveAt: '2026-07-02T10:00:00.000Z',
+      createdAt: NOW.toISOString(),
+    });
+    expect(repository.fxRates).toHaveLength(1);
+  });
+
+  test('rejects duplicate FX rate timestamp for the same pair', async () => {
+    const repository = new FakeCapacityRepository({
+      fxRates: [{
+        id: 5,
+        baseCurrency: 'EUR',
+        quoteCurrency: 'USD',
+        rate: 1.2,
+        effectiveAt: '2026-07-02T10:00:00.000Z',
+        createdAt: NOW,
+      }],
+    });
+    const service = createService(repository);
+
+    await expect(service.createFxRate({
+      baseCurrency: 'EUR',
+      quoteCurrency: 'USD',
+      rate: 1.3,
+      effectiveAt: '2026-07-02T10:00:00.000Z',
+    })).rejects.toMatchObject({
+      output: { statusCode: 409 },
+    });
+  });
+
   test('creates a reservation and returns refreshed capacity', async () => {
     const repository = new FakeCapacityRepository();
     const service = createService(repository);
@@ -232,8 +317,11 @@ describe('CapacityService', () => {
       id: 1,
       programId: 'program-1',
       invoiceId: 'invoice-1',
+      invoiceAmount: 200,
+      invoiceCurrency: 'USD',
       amount: 200,
       currency: 'USD',
+      fxRateId: null,
       status: ReservationStatus.Reserved,
       releasedAmount: 0,
     });
@@ -252,6 +340,87 @@ describe('CapacityService', () => {
     expect(repository.lockedBalanceReads).toEqual([1]);
   });
 
+  test('creates a cross-currency reservation using the latest effective direct FX rate', async () => {
+    const repository = new FakeCapacityRepository({
+      fxRates: [
+        {
+          id: 4,
+          baseCurrency: 'EUR',
+          quoteCurrency: 'USD',
+          rate: 1.1,
+          effectiveAt: '2026-07-02T10:00:00.000Z',
+          createdAt: NOW,
+        },
+        {
+          id: 5,
+          baseCurrency: 'EUR',
+          quoteCurrency: 'USD',
+          rate: 1.25,
+          effectiveAt: '2026-07-02T11:00:00.000Z',
+          createdAt: NOW,
+        },
+      ],
+    });
+    const service = createService(repository);
+
+    const result = await service.createReservation('program-1', {
+      invoiceId: 'invoice-eur-1',
+      amount: 200,
+      currency: 'EUR',
+    });
+
+    expect(result.reservation).toMatchObject({
+      invoiceId: 'invoice-eur-1',
+      invoiceAmount: 200,
+      invoiceCurrency: 'EUR',
+      amount: 250,
+      currency: 'USD',
+      fxRateId: 5,
+    });
+    expect(result.capacity).toMatchObject({
+      reservedAmount: 350,
+      availableAmount: 650,
+    });
+    expect(repository.capacityEvents[0]).toMatchObject({
+      amount: 250,
+      currency: 'USD',
+    });
+  });
+
+  test('rounds converted reservation amount before capacity checks and persistence', async () => {
+    const repository = new FakeCapacityRepository({
+      balances: [{ programId: 1, totalLimit: 110.01, reservedAmount: 100, updatedAt: NOW }],
+      fxRates: [{
+        id: 8,
+        baseCurrency: 'EUR',
+        quoteCurrency: 'USD',
+        rate: 1,
+        effectiveAt: '2026-07-02T11:00:00.000Z',
+        createdAt: NOW,
+      }],
+    });
+    const service = createService(repository);
+
+    const result = await service.createReservation('program-1', {
+      invoiceId: 'invoice-rounding',
+      amount: 10.005,
+      currency: 'EUR',
+    });
+
+    expect(result.reservation).toMatchObject({
+      invoiceAmount: 10.005,
+      invoiceCurrency: 'EUR',
+      amount: 10.01,
+      currency: 'USD',
+      fxRateId: 8,
+    });
+    expect(result.capacity).toMatchObject({
+      reservedAmount: 110.01,
+      availableAmount: 0,
+    });
+    expect(repository.balances[0].reservedAmount).toBe(110.01);
+  });
+
   test('rejects reservation when capacity is insufficient', async () => {
     const service = createService();
 
@@ -262,6 +431,30 @@ describe('CapacityService', () => {
     })).rejects.toMatchObject({
       output: { statusCode: 409 },
     });
+  });
+
+  test('rejects cross-currency reservation when converted capacity is insufficient', async () => {
+    const repository = new FakeCapacityRepository({
+      fxRates: [{
+        id: 11,
+        baseCurrency: 'EUR',
+        quoteCurrency: 'USD',
+        rate: 2,
+        effectiveAt: '2026-07-02T11:00:00.000Z',
+        createdAt: NOW,
+      }],
+    });
+    const service = createService(repository);
+
+    await expect(service.createReservation('program-1', {
+      invoiceId: 'invoice-too-large-eur',
+      amount: 451,
+      currency: 'EUR',
+    })).rejects.toMatchObject({
+      output: { statusCode: 409 },
+    });
+    expect(repository.reservations).toHaveLength(0);
+    expect(repository.capacityEvents).toHaveLength(0);
   });
 
   test('rejects duplicate invoice reservations for the same program', async () => {
@@ -342,7 +535,7 @@ describe('CapacityService', () => {
     expect(repository.lockedBalanceReads).toEqual([1, 1]);
   });
 
-  test('rejects reservation when currency differs from program currency', async () => {
+  test('rejects cross-currency reservation when no usable FX rate exists', async () => {
     const service = createService();
 
     await expect(service.createReservation('program-1', {
@@ -392,6 +585,57 @@ describe('CapacityService', () => {
     });
     expect(repository.lockedBalanceReads).toEqual([1]);
     expect(repository.lockedReservationReads).toEqual([{ programId: 1, invoiceId: 'invoice-9' }]);
+  });
+
+  test('releases cross-currency reservation using the stored converted amount without re-conversion', async () => {
+    const repository = new FakeCapacityRepository({
+      balances: [{ programId: 1, totalLimit: 1000, reservedAmount: 250, updatedAt: NOW }],
+      reservations: [{
+        id: 12,
+        programId: 1,
+        invoiceId: 'invoice-eur-release',
+        invoiceAmount: 200,
+        invoiceCurrency: 'EUR',
+        amount: 250,
+        currency: 'USD',
+        fxRateId: 5,
+        status: ReservationStatus.Reserved,
+        releasedAmount: 0,
+        reservedAt: NOW,
+        releasedAt: null,
+        createdAt: NOW,
+        updatedAt: NOW,
+      }],
+      fxRates: [{
+        id: 6,
+        baseCurrency: 'EUR',
+        quoteCurrency: 'USD',
+        rate: 2,
+        effectiveAt: NOW,
+        createdAt: NOW,
+      }],
+    });
+    const service = createService(repository);
+
+    const result = await service.releaseReservation('program-1', 'invoice-eur-release');
+
+    expect(result.reservation).toMatchObject({
+      invoiceAmount: 200,
+      invoiceCurrency: 'EUR',
+      amount: 250,
+      currency: 'USD',
+      fxRateId: 5,
+      releasedAmount: 250,
+    });
+    expect(result.capacity).toMatchObject({
+      reservedAmount: 0,
+      availableAmount: 1000,
+    });
+    expect(repository.capacityEvents[0]).toMatchObject({
+      eventType: CapacityEventType.ReservationReleased,
+      amount: 250,
+      currency: 'USD',
+    });
   });
 
   test('rejects release for an already released reservation', async () => {

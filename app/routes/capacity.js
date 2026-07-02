@@ -18,6 +18,21 @@ export default [
     },
   },
   {
+    method: 'POST',
+    path: '/fx-rates',
+    options: {
+      handler: CapacityHandler.createFxRate,
+      description: 'Create locally managed FX rate',
+      validate: validator.createFxRate.req,
+      response: {
+        failAction: 'log',
+        status: {
+          201: validator.createFxRate.res,
+        },
+      },
+    },
+  },
+  {
     method: 'GET',
     path: '/programs/{programId}/capacity',
     options: {

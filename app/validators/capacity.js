@@ -36,8 +36,11 @@ const reservationResponse = Joi.object({
   id: Joi.number().integer().positive().required(),
   programId: Joi.string().required(),
   invoiceId: Joi.string().required(),
+  invoiceAmount: Joi.number().positive().required(),
+  invoiceCurrency: Joi.string().length(3).required(),
   amount: Joi.number().positive().required(),
   currency: Joi.string().length(3).required(),
+  fxRateId: Joi.number().integer().positive().allow(null).required(),
   status: Joi.string().valid(...Object.values(ReservationStatus)).required(),
   releasedAmount: Joi.number().min(0).required(),
   reservedAt: timestamp,
@@ -49,6 +52,15 @@ const reservationResponse = Joi.object({
 const reservationResultResponse = Joi.object({
   reservation: reservationResponse,
   capacity: capacityResponse,
+}).required();
+
+const fxRateResponse = Joi.object({
+  id: Joi.number().integer().positive().required(),
+  baseCurrency: Joi.string().length(3).required(),
+  quoteCurrency: Joi.string().length(3).required(),
+  rate: Joi.number().positive().required(),
+  effectiveAt: timestamp,
+  createdAt: timestamp,
 }).required();
 
 export const createProgram = {
@@ -63,6 +75,18 @@ export const createProgram = {
     program: programResponse,
     capacity: capacityResponse,
   }).required(),
+};
+
+export const createFxRate = {
+  req: {
+    payload: Joi.object({
+      baseCurrency: currency,
+      quoteCurrency: currency,
+      rate: amount,
+      effectiveAt: timestamp,
+    }).required(),
+  },
+  res: fxRateResponse,
 };
 
 export const getCapacity = {
