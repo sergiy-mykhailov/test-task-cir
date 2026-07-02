@@ -25,11 +25,21 @@ const readOptionalEnv = (name, defaultValue) => {
   return value && value.trim() ? value.trim() : defaultValue;
 };
 
-const readPositiveAmount = () => {
-  const amount = Number(readRequiredEnv('AMOUNT'));
+const readPositiveAmount = (name = 'AMOUNT') => {
+  const amount = Number(readRequiredEnv(name));
 
   if (!Number.isFinite(amount) || amount <= 0) {
-    throw new Error('AMOUNT must be a positive number.');
+    throw new Error(`${name} must be a positive number.`);
+  }
+
+  return amount;
+};
+
+const readNonNegativeAmount = (name) => {
+  const amount = Number(readRequiredEnv(name));
+
+  if (!Number.isFinite(amount) || amount < 0) {
+    throw new Error(`${name} must be a non-negative number.`);
   }
 
   return amount;
@@ -57,17 +67,26 @@ const buildBaseMessage = (eventType) => ({
   eventType,
   occurredAt: readOptionalEnv('OCCURRED_AT', new Date().toISOString()),
   programId: readRequiredEnv('PROGRAM_ID'),
-  invoiceId: readRequiredEnv('INVOICE_ID'),
 });
 
 export const buildReservationApprovedMessage = () => ({
   ...buildBaseMessage(TreasuryKafkaEventType.ReservationApproved),
+  invoiceId: readRequiredEnv('INVOICE_ID'),
   amount: readPositiveAmount(),
   currency: readCurrency(),
 });
 
-export const buildInvoiceRepaidMessage = () =>
-  buildBaseMessage(TreasuryKafkaEventType.InvoiceRepaid);
+export const buildInvoiceRepaidMessage = () => ({
+  ...buildBaseMessage(TreasuryKafkaEventType.InvoiceRepaid),
+  invoiceId: readRequiredEnv('INVOICE_ID'),
+});
+
+export const buildProgramReconciledMessage = () => ({
+  ...buildBaseMessage(TreasuryKafkaEventType.ProgramReconciled),
+  currency: readCurrency(),
+  totalLimit: readPositiveAmount('TOTAL_LIMIT'),
+  reservedAmount: readNonNegativeAmount('RESERVED_AMOUNT'),
+});
 
 export const createProducerCliLogger = (consoleObject = console) => ({
   warn(payload, message) {

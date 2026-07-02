@@ -32,4 +32,8 @@ export default class TreasuryKafkaMessagesRepository {
   createMessage(data, trx) {
     return this.treasuryKafkaMessagesModel.query(trx).insert(data).returning('*');
   }
+
+  updateMessage(id, patch, trx) {
+    return this.treasuryKafkaMessagesModel.query(trx).patchAndFetchById(id, patch);
+  }
 }

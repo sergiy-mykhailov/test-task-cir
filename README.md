@@ -11,6 +11,7 @@
 - The service is assumed to be consumed by other API services, so authentication uses a simple static API token instead of user sessions, OAuth/OIDC, or JWT issuance.
 - `GET /health` is intentionally unauthenticated because clustered deployments commonly use unauthenticated liveness and readiness checks.
 - Kafka integration delivers reservation and repayment events from the treasury system through the same capacity domain operations as the API.
+- Bulk reconciliation snapshots update `program_capacity_balances` only. Existing `reservations` are not rebuilt or modified from snapshots.
 
 ## Installation
 
@@ -64,6 +65,11 @@ Produce a local treasury repayment message through Kafka.
 PROGRAM_ID=p-1 INVOICE_ID=i-4 npm run kafka:produce:release
 ```
 
+Produce a local treasury reconciliation snapshot through Kafka.
+```shell
+PROGRAM_ID=p-1 TOTAL_LIMIT=10000000 RESERVED_AMOUNT=1250000 CURRENCY=USD npm run kafka:produce:reconciliation
+```
+
 Stop all services.
 ```shell
 docker-compose stop
@@ -84,4 +90,5 @@ docker-compose stop
 - On startup, the service waits for Kafka readiness and creates/confirms the local topic before subscribing.
 - `RESERVATION_APPROVED` messages create reservations with `source = KAFKA_TREASURY`.
 - `INVOICE_REPAID` messages release existing reservations with `source = KAFKA_TREASURY`.
+- `PROGRAM_RECONCILED` messages overwrite the capacity balance projection with `source = RECONCILIATION` and leave reservation rows unchanged.
 - `treasury_kafka_messages` stores processed and rejected Kafka messages for idempotency and malformed-message audit records.

@@ -249,6 +249,58 @@ export default class CapacityService {
     });
   }
 
+  // Reconciliation corrects the balance projection; reservation history remains unchanged.
+  async reconcileProgramSnapshot(programExternalId, payload, {
+    source = CapacityEventSource.Reconciliation,
+    occurredAt,
+    trx,
+  } = {}) {
+    return this.#withTransaction(trx, async (trx) => {
+      const { program } = await this.getProgramState(programExternalId, trx, { lockBalance: true });
+      const totalLimit = this.#getValidatedAmount(payload.totalLimit, 'totalLimit');
+      const reservedAmount = this.#getValidatedNonNegativeAmount(payload.reservedAmount, 'reservedAmount');
+
+      if (payload.currency !== program.currency) {
+        throwError(
+          'Reconciliation currency must match program currency',
+          HttpStatusCode.UnprocessableEntity,
+          { programId: programExternalId, expectedCurrency: program.currency, receivedCurrency: payload.currency },
+        );
+      }
+
+      if (reservedAmount > totalLimit) {
+        throwError(
+          'reservedAmount must not exceed totalLimit',
+          HttpStatusCode.BadRequest,
+          { totalLimit, reservedAmount },
+        );
+      }
+
+      const reconciliationOccurredAt = toTimestamp(occurredAt || payload.occurredAt || this.now());
+      const updatedBalance = await this.repository.updateBalance(program.id, {
+        totalLimit,
+        reservedAmount,
+        updatedAt: reconciliationOccurredAt,
+      }, trx);
+
+      await this.repository.createCapacityEvent({
+        programId: program.id,
+        reservationId: null,
+        eventType: CapacityEventType.ReconciliationApplied,
+        source,
+        invoiceId: null,
+        amount: reservedAmount,
+        currency: program.currency,
+        occurredAt: reconciliationOccurredAt,
+        createdAt: reconciliationOccurredAt,
+      }, trx);
+
+      return {
+        capacity: this.#buildCapacityResponse(program, updatedBalance),
+      };
+    });
+  }
+
   async getProgramState(programExternalId, trx, { lockBalance = false } = {}) {
     const program = await this.repository.findProgramByExternalId(programExternalId, trx);
 
@@ -278,6 +330,16 @@ export default class CapacityService {
 
     if (!Number.isFinite(numericAmount) || numericAmount <= 0) {
       throwError(`${fieldName} must be positive`, HttpStatusCode.BadRequest, { [fieldName]: amount });
+    }
+
+    return numericAmount;
+  }
+
+  #getValidatedNonNegativeAmount(amount, fieldName) {
+    const numericAmount = toAmount(amount);
+
+    if (!Number.isFinite(numericAmount) || numericAmount < 0) {
+      throwError(`${fieldName} must be non-negative`, HttpStatusCode.BadRequest, { [fieldName]: amount });
     }
 
     return numericAmount;

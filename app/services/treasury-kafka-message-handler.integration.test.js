@@ -286,4 +286,309 @@ describe('TreasuryKafkaMessageHandler integration', () => {
     });
     expect(await countAllEvents()).toBe(0);
   });
+
+  test('processes reconciliation snapshots by overwriting the balance projection only', async () => {
+    const service = createService();
+    const handler = createHandler();
+    const programExternalId = nextProgramId();
+
+    await service.createProgram({
+      externalId: programExternalId,
+      currency: 'USD',
+      totalLimit: 1000,
+    });
+    await service.createReservation(programExternalId, {
+      invoiceId: 'invoice-unchanged-by-reconciliation',
+      amount: 300,
+      currency: 'USD',
+    });
+
+    const result = await handler.handleKafkaMessage(buildKafkaMessage({
+      messageId: 'kafka-message-reconciliation',
+      schemaVersion: 1,
+      eventType: TreasuryKafkaEventType.ProgramReconciled,
+      occurredAt: '2026-07-02T11:50:00.000Z',
+      programId: programExternalId,
+      currency: 'USD',
+      totalLimit: 1500,
+      reservedAmount: 125,
+    }, {
+      offset: '7',
+    }));
+    const program = await findProgram(programExternalId);
+    const balance = await findBalance(program.id);
+    const reservations = await findReservations(program.id);
+    const events = await findEvents(program.id, CapacityEventType.ReconciliationApplied);
+    const messages = await findKafkaMessages();
+
+    expect(result.status).toBe(TreasuryKafkaHandlerResult.Processed);
+    expect(messages).toHaveLength(1);
+    expect(messages[0]).toMatchObject({
+      messageId: 'kafka-message-reconciliation',
+      eventType: TreasuryKafkaEventType.ProgramReconciled,
+      programId: programExternalId,
+      invoiceId: null,
+      status: TreasuryKafkaMessageStatus.Processed,
+      failureReason: null,
+    });
+    expect(balance).toMatchObject({
+      totalLimit: 1500,
+      reservedAmount: 125,
+    });
+    expect(reservations).toHaveLength(1);
+    expect(reservations[0]).toMatchObject({
+      invoiceId: 'invoice-unchanged-by-reconciliation',
+      status: ReservationStatus.Reserved,
+      amount: 300,
+    });
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      source: CapacityEventSource.Reconciliation,
+      reservationId: null,
+      invoiceId: null,
+      amount: 125,
+      currency: 'USD',
+    });
+    expect(events[0].occurredAt).toBeInstanceOf(Date);
+  });
+
+  test('skips duplicate reconciliation message ids without applying the snapshot twice', async () => {
+    const service = createService();
+    const handler = createHandler();
+    const programExternalId = nextProgramId();
+    const message = {
+      messageId: 'kafka-message-reconciliation-duplicate-id',
+      schemaVersion: 1,
+      eventType: TreasuryKafkaEventType.ProgramReconciled,
+      occurredAt: '2026-07-02T11:50:00.000Z',
+      programId: programExternalId,
+      currency: 'USD',
+      totalLimit: 1000,
+      reservedAmount: 100,
+    };
+
+    await service.createProgram({
+      externalId: programExternalId,
+      currency: 'USD',
+      totalLimit: 500,
+    });
+    await handler.handleKafkaMessage(buildKafkaMessage(message, { offset: '8' }));
+    const result = await handler.handleKafkaMessage(buildKafkaMessage({
+      ...message,
+      totalLimit: 2000,
+      reservedAmount: 900,
+    }, {
+      offset: '9',
+    }));
+    const program = await findProgram(programExternalId);
+    const balance = await findBalance(program.id);
+    const messages = await findKafkaMessages();
+
+    expect(result.status).toBe(TreasuryKafkaHandlerResult.Duplicate);
+    expect(messages).toHaveLength(1);
+    expect(balance).toMatchObject({
+      totalLimit: 1000,
+      reservedAmount: 100,
+    });
+    expect(await countEvents(program.id, CapacityEventType.ReconciliationApplied)).toBe(1);
+  });
+
+  test('skips duplicate reconciliation broker offsets without applying the snapshot twice', async () => {
+    const service = createService();
+    const handler = createHandler();
+    const programExternalId = nextProgramId();
+    const message = {
+      messageId: 'kafka-message-reconciliation-offset-1',
+      schemaVersion: 1,
+      eventType: TreasuryKafkaEventType.ProgramReconciled,
+      occurredAt: '2026-07-02T11:50:00.000Z',
+      programId: programExternalId,
+      currency: 'USD',
+      totalLimit: 1000,
+      reservedAmount: 100,
+    };
+
+    await service.createProgram({
+      externalId: programExternalId,
+      currency: 'USD',
+      totalLimit: 500,
+    });
+    await handler.handleKafkaMessage(buildKafkaMessage(message, { offset: '10' }));
+    const result = await handler.handleKafkaMessage(buildKafkaMessage({
+      ...message,
+      messageId: 'kafka-message-reconciliation-offset-2',
+      totalLimit: 2000,
+      reservedAmount: 900,
+    }, {
+      offset: '10',
+    }));
+    const program = await findProgram(programExternalId);
+    const balance = await findBalance(program.id);
+    const messages = await findKafkaMessages();
+
+    expect(result.status).toBe(TreasuryKafkaHandlerResult.Duplicate);
+    expect(messages).toHaveLength(1);
+    expect(balance).toMatchObject({
+      totalLimit: 1000,
+      reservedAmount: 100,
+    });
+    expect(await countEvents(program.id, CapacityEventType.ReconciliationApplied)).toBe(1);
+  });
+
+  test('records unknown reconciliation programs as rejected without creating capacity events', async () => {
+    const handler = createHandler();
+
+    const result = await handler.handleKafkaMessage(buildKafkaMessage({
+      messageId: 'kafka-message-reconciliation-unknown-program',
+      schemaVersion: 1,
+      eventType: TreasuryKafkaEventType.ProgramReconciled,
+      occurredAt: '2026-07-02T11:50:00.000Z',
+      programId: 'missing-program',
+      currency: 'USD',
+      totalLimit: 1000,
+      reservedAmount: 100,
+    }, {
+      offset: '11',
+    }));
+    const messages = await findKafkaMessages();
+
+    expect(result.status).toBe(TreasuryKafkaHandlerResult.Rejected);
+    expect(messages).toHaveLength(1);
+    expect(messages[0]).toMatchObject({
+      messageId: 'kafka-message-reconciliation-unknown-program',
+      status: TreasuryKafkaMessageStatus.Rejected,
+      failureReason: 'Program not found',
+    });
+    expect(await countAllEvents()).toBe(0);
+  });
+
+  test('records reconciliation currency mismatches as rejected without mutating capacity', async () => {
+    const service = createService();
+    const handler = createHandler();
+    const programExternalId = nextProgramId();
+
+    await service.createProgram({
+      externalId: programExternalId,
+      currency: 'USD',
+      totalLimit: 1000,
+    });
+
+    const result = await handler.handleKafkaMessage(buildKafkaMessage({
+      messageId: 'kafka-message-reconciliation-currency-mismatch',
+      schemaVersion: 1,
+      eventType: TreasuryKafkaEventType.ProgramReconciled,
+      occurredAt: '2026-07-02T11:50:00.000Z',
+      programId: programExternalId,
+      currency: 'EUR',
+      totalLimit: 1000,
+      reservedAmount: 100,
+    }, {
+      offset: '12',
+    }));
+    const program = await findProgram(programExternalId);
+    const balance = await findBalance(program.id);
+    const messages = await findKafkaMessages();
+
+    expect(result.status).toBe(TreasuryKafkaHandlerResult.Rejected);
+    expect(messages[0]).toMatchObject({
+      status: TreasuryKafkaMessageStatus.Rejected,
+      failureReason: 'Reconciliation currency must match program currency',
+    });
+    expect(balance).toMatchObject({
+      totalLimit: 1000,
+      reservedAmount: 0,
+    });
+    expect(await countEvents(program.id, CapacityEventType.ReconciliationApplied)).toBe(0);
+  });
+
+  test('records invalid reconciliation amounts as rejected without mutating capacity', async () => {
+    const service = createService();
+    const handler = createHandler();
+    const programExternalId = nextProgramId();
+
+    await service.createProgram({
+      externalId: programExternalId,
+      currency: 'USD',
+      totalLimit: 1000,
+    });
+
+    const result = await handler.handleKafkaMessage(buildKafkaMessage({
+      messageId: 'kafka-message-reconciliation-invalid-amount',
+      schemaVersion: 1,
+      eventType: TreasuryKafkaEventType.ProgramReconciled,
+      occurredAt: '2026-07-02T11:50:00.000Z',
+      programId: programExternalId,
+      currency: 'USD',
+      totalLimit: 1000,
+      reservedAmount: 1001,
+    }, {
+      offset: '13',
+    }));
+    const program = await findProgram(programExternalId);
+    const balance = await findBalance(program.id);
+    const messages = await findKafkaMessages();
+
+    expect(result.status).toBe(TreasuryKafkaHandlerResult.Rejected);
+    expect(messages[0]).toMatchObject({
+      status: TreasuryKafkaMessageStatus.Rejected,
+      failureReason: 'reservedAmount must not exceed totalLimit',
+    });
+    expect(balance).toMatchObject({
+      totalLimit: 1000,
+      reservedAmount: 0,
+    });
+    expect(await countEvents(program.id, CapacityEventType.ReconciliationApplied)).toBe(0);
+  });
+
+  test('accepts reconciliation snapshots with zero reserved amount', async () => {
+    const service = createService();
+    const handler = createHandler();
+    const programExternalId = nextProgramId();
+
+    await service.createProgram({
+      externalId: programExternalId,
+      currency: 'USD',
+      totalLimit: 1000,
+    });
+    await service.createReservation(programExternalId, {
+      invoiceId: 'invoice-zero-reconciliation',
+      amount: 300,
+      currency: 'USD',
+    });
+
+    const result = await handler.handleKafkaMessage(buildKafkaMessage({
+      messageId: 'kafka-message-reconciliation-zero',
+      schemaVersion: 1,
+      eventType: TreasuryKafkaEventType.ProgramReconciled,
+      occurredAt: '2026-07-02T11:50:00.000Z',
+      programId: programExternalId,
+      currency: 'USD',
+      totalLimit: 1000,
+      reservedAmount: 0,
+    }, {
+      offset: '14',
+    }));
+    const program = await findProgram(programExternalId);
+    const balance = await findBalance(program.id);
+    const events = await findEvents(program.id, CapacityEventType.ReconciliationApplied);
+    const reservations = await findReservations(program.id);
+
+    expect(result.status).toBe(TreasuryKafkaHandlerResult.Processed);
+    expect(balance).toMatchObject({
+      totalLimit: 1000,
+      reservedAmount: 0,
+    });
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      source: CapacityEventSource.Reconciliation,
+      amount: 0,
+      currency: 'USD',
+    });
+    expect(reservations).toHaveLength(1);
+    expect(reservations[0]).toMatchObject({
+      invoiceId: 'invoice-zero-reconciliation',
+      status: ReservationStatus.Reserved,
+      amount: 300,
+    });
+  });
 });

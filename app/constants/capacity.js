@@ -7,6 +7,7 @@ export const CapacityEventType = Object.freeze({
   ProgramCreated: 'PROGRAM_CREATED',
   ReservationCreated: 'RESERVATION_CREATED',
   ReservationReleased: 'RESERVATION_RELEASED',
+  ReconciliationApplied: 'RECONCILIATION_APPLIED',
 });
 
 export const CapacityEventSource = Object.freeze({
@@ -18,6 +19,7 @@ export const CapacityEventSource = Object.freeze({
 export const TreasuryKafkaEventType = Object.freeze({
   ReservationApproved: 'RESERVATION_APPROVED',
   InvoiceRepaid: 'INVOICE_REPAID',
+  ProgramReconciled: 'PROGRAM_RECONCILED',
 });
 
 export const TreasuryKafkaMessageStatus = Object.freeze({

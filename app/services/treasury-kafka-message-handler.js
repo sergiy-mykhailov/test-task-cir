@@ -64,7 +64,24 @@ export default class TreasuryKafkaMessageHandler {
         status: TreasuryKafkaMessageStatus.Processed,
       }), trx);
 
-      await this.#applyDomainOperation(parsed.payload, trx);
+      try {
+        await this.#applyDomainOperation(parsed.payload, trx);
+      } catch (error) {
+        // Reconciliation 4xx domain failures are terminal snapshot problems, not retryable broker errors.
+        if (this.#shouldRejectDomainError(parsed.payload, error)) {
+          const rejectedMessage = await this.repository.updateMessage(message.id, {
+            status: TreasuryKafkaMessageStatus.Rejected,
+            failureReason: this.#getErrorMessage(error),
+          }, trx);
+
+          return {
+            status: TreasuryKafkaHandlerResult.Rejected,
+            message: rejectedMessage,
+          };
+        }
+
+        throw error;
+      }
 
       return {
         status: TreasuryKafkaHandlerResult.Processed,
@@ -126,7 +143,33 @@ export default class TreasuryKafkaMessageHandler {
       return;
     }
 
+    if (payload.eventType === TreasuryKafkaEventType.ProgramReconciled) {
+      await this.capacityDomainService.reconcileProgramSnapshot(payload.programId, {
+        currency: payload.currency,
+        totalLimit: payload.totalLimit,
+        reservedAmount: payload.reservedAmount,
+        occurredAt: payload.occurredAt,
+      }, {
+        source: CapacityEventSource.Reconciliation,
+        occurredAt: payload.occurredAt,
+        trx,
+      });
+
+      return;
+    }
+
     throw new Error(`Unsupported treasury Kafka event type: ${payload.eventType}`);
+  }
+
+  #shouldRejectDomainError(payload, error) {
+    return payload.eventType === TreasuryKafkaEventType.ProgramReconciled
+      && error?.isBoom
+      && error.output?.statusCode >= 400
+      && error.output?.statusCode < 500;
+  }
+
+  #getErrorMessage(error) {
+    return error?.message || 'Domain validation failed';
   }
 
   #getMessageMetadata({ topic, partition, message }) {
@@ -182,17 +225,39 @@ export default class TreasuryKafkaMessageHandler {
       return 'programId is required';
     }
 
-    if (!isNonEmptyString(payload.invoiceId)) {
-      return 'invoiceId is required';
-    }
-
     if (payload.eventType === TreasuryKafkaEventType.ReservationApproved) {
+      if (!isNonEmptyString(payload.invoiceId)) {
+        return 'invoiceId is required';
+      }
+
       if (!Number.isFinite(Number(payload.amount)) || Number(payload.amount) <= 0) {
         return 'amount must be positive';
       }
 
       if (!isNonEmptyString(payload.currency) || !CURRENCY_PATTERN.test(payload.currency)) {
         return 'currency must be an uppercase three-letter code';
+      }
+    }
+
+    if (payload.eventType === TreasuryKafkaEventType.InvoiceRepaid && !isNonEmptyString(payload.invoiceId)) {
+      return 'invoiceId is required';
+    }
+
+    if (payload.eventType === TreasuryKafkaEventType.ProgramReconciled) {
+      if (!isNonEmptyString(payload.currency) || !CURRENCY_PATTERN.test(payload.currency)) {
+        return 'currency must be an uppercase three-letter code';
+      }
+
+      if (!Number.isFinite(Number(payload.totalLimit)) || Number(payload.totalLimit) <= 0) {
+        return 'totalLimit must be positive';
+      }
+
+      if (!Number.isFinite(Number(payload.reservedAmount)) || Number(payload.reservedAmount) < 0) {
+        return 'reservedAmount must be non-negative';
+      }
+
+      if (Number(payload.reservedAmount) > Number(payload.totalLimit)) {
+        return 'reservedAmount must not exceed totalLimit';
       }
     }
 

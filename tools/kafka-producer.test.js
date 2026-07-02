@@ -2,7 +2,10 @@ import { jest } from '@jest/globals';
 import { Partitioners } from 'kafkajs';
 import { createKafkaLogPolicy } from '../app/kafka/log-policy.js';
 import { prepareTreasuryTopic } from '../app/kafka/topic-readiness.js';
-import { publishTreasuryMessage } from './kafka-producer.js';
+import {
+  buildProgramReconciledMessage,
+  publishTreasuryMessage,
+} from './kafka-producer.js';
 
 const TOPIC = 'treasury.capacity.events';
 const READINESS = {
@@ -27,6 +30,12 @@ const ENV_KEYS = [
   'KAFKA_BROKERS',
   'KAFKA_CLIENT_ID',
   'KAFKA_TREASURY_EVENTS_TOPIC',
+  'PROGRAM_ID',
+  'MESSAGE_ID',
+  'OCCURRED_AT',
+  'TOTAL_LIMIT',
+  'RESERVED_AMOUNT',
+  'CURRENCY',
 ];
 const ORIGINAL_ENV = ENV_KEYS.reduce((env, key) => ({
   ...env,
@@ -117,6 +126,36 @@ describe('Kafka producer scripts', () => {
     expect(kafkaClient.producer).toHaveBeenCalledWith({
       createPartitioner: Partitioners.DefaultPartitioner,
     });
+  });
+
+  test('builds reconciliation snapshot messages from environment', () => {
+    process.env.PROGRAM_ID = 'program-1';
+    process.env.MESSAGE_ID = 'treasury-recon-1';
+    process.env.OCCURRED_AT = '2026-07-02T14:00:00.000Z';
+    process.env.TOTAL_LIMIT = '10000000';
+    process.env.RESERVED_AMOUNT = '0';
+    process.env.CURRENCY = 'USD';
+
+    expect(buildProgramReconciledMessage()).toEqual({
+      messageId: 'treasury-recon-1',
+      schemaVersion: 1,
+      eventType: 'PROGRAM_RECONCILED',
+      occurredAt: '2026-07-02T14:00:00.000Z',
+      programId: 'program-1',
+      currency: 'USD',
+      totalLimit: 10000000,
+      reservedAmount: 0,
+    });
+  });
+
+  test('rejects negative reconciliation reserved amounts', () => {
+    process.env.PROGRAM_ID = 'program-1';
+    process.env.TOTAL_LIMIT = '10000000';
+    process.env.RESERVED_AMOUNT = '-1';
+    process.env.CURRENCY = 'USD';
+
+    expect(() => buildProgramReconciledMessage())
+      .toThrow('RESERVED_AMOUNT must be a non-negative number.');
   });
 
   test('publishes to an existing topic without creating it', async () => {

@@ -18,7 +18,7 @@ export default class CapacityEvents extends BaseModel {
         eventType: { type: 'string', enum: Object.values(CapacityEventType) },
         source: { type: 'string', enum: Object.values(CapacityEventSource) },
         invoiceId: { type: ['string', 'null'], minLength: 1, maxLength: 255 },
-        amount: { type: 'number', exclusiveMinimum: 0 },
+        amount: { type: 'number', minimum: 0 },
         currency: { type: 'string', minLength: 3, maxLength: 3 },
         occurredAt: { type: 'string', format: 'date-time' },
         createdAt: { type: 'string', format: 'date-time' },

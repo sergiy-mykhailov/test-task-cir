@@ -12,6 +12,7 @@
     "db:migrate:all": "env-cmd -f ./.env.local knex migrate:latest",
     "kafka:produce:reservation": "env-cmd -f ./.env.local node ./tools/produce-reservation-message.js",
     "kafka:produce:release": "env-cmd -f ./.env.local node ./tools/produce-release-message.js",
+    "kafka:produce:reconciliation": "env-cmd -f ./.env.local node ./tools/produce-reconciliation-message.js",
     "test:unit": "node --experimental-vm-modules ./node_modules/jest/bin/jest.js --testPathIgnorePatterns=integration\\.test\\.js$",
     "test:integration": "node -e \"const fs=require('node:fs'); if (!fs.existsSync('.env.test')) { console.error('Missing .env.test.'); process.exit(1); }\" && env-cmd -f ./.env.test node --experimental-vm-modules ./node_modules/jest/bin/jest.js --testRegex=integration\\.test\\.js$ --runInBand"
   },

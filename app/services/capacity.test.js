@@ -1,5 +1,6 @@
 import CapacityService from './capacity.js';
 import {
+  CapacityEventSource,
   CapacityEventType,
   ReservationStatus,
 } from '../constants/capacity.js';
@@ -636,6 +637,129 @@ describe('CapacityService', () => {
       amount: 250,
       currency: 'USD',
     });
+  });
+
+  test('reconciles a program capacity snapshot without changing reservations', async () => {
+    const repository = new FakeCapacityRepository({
+      balances: [{ programId: 1, totalLimit: 1000, reservedAmount: 250, updatedAt: NOW }],
+      reservations: [{
+        id: 14,
+        programId: 1,
+        invoiceId: 'invoice-kept-during-reconciliation',
+        invoiceAmount: 200,
+        invoiceCurrency: 'USD',
+        amount: 200,
+        currency: 'USD',
+        fxRateId: null,
+        status: ReservationStatus.Reserved,
+        releasedAmount: 0,
+        reservedAt: NOW,
+        releasedAt: null,
+        createdAt: NOW,
+        updatedAt: NOW,
+      }],
+    });
+    const service = createService(repository);
+
+    const result = await service.reconcileProgramSnapshot('program-1', {
+      currency: 'USD',
+      totalLimit: 1500,
+      reservedAmount: 375,
+      occurredAt: '2026-07-02T11:00:00.000Z',
+    });
+
+    expect(result.capacity).toMatchObject({
+      programId: 'program-1',
+      totalLimit: 1500,
+      reservedAmount: 375,
+      availableAmount: 1125,
+      updatedAt: '2026-07-02T11:00:00.000Z',
+    });
+    expect(repository.reservations).toHaveLength(1);
+    expect(repository.reservations[0]).toMatchObject({
+      invoiceId: 'invoice-kept-during-reconciliation',
+      status: ReservationStatus.Reserved,
+      amount: 200,
+    });
+    expect(repository.capacityEvents).toHaveLength(1);
+    expect(repository.capacityEvents[0]).toMatchObject({
+      eventType: CapacityEventType.ReconciliationApplied,
+      source: CapacityEventSource.Reconciliation,
+      reservationId: null,
+      invoiceId: null,
+      amount: 375,
+      currency: 'USD',
+      occurredAt: '2026-07-02T11:00:00.000Z',
+    });
+    expect(repository.lockedBalanceReads).toEqual([1]);
+  });
+
+  test('accepts a reconciliation snapshot with zero reserved amount', async () => {
+    const repository = new FakeCapacityRepository({
+      balances: [{ programId: 1, totalLimit: 1000, reservedAmount: 250, updatedAt: NOW }],
+    });
+    const service = createService(repository);
+
+    const result = await service.reconcileProgramSnapshot('program-1', {
+      currency: 'USD',
+      totalLimit: 900,
+      reservedAmount: 0,
+      occurredAt: '2026-07-02T11:15:00.000Z',
+    });
+
+    expect(result.capacity).toMatchObject({
+      totalLimit: 900,
+      reservedAmount: 0,
+      availableAmount: 900,
+    });
+    expect(repository.capacityEvents[0]).toMatchObject({
+      eventType: CapacityEventType.ReconciliationApplied,
+      amount: 0,
+    });
+  });
+
+  test('rejects reconciliation currency mismatch without mutating balance', async () => {
+    const repository = new FakeCapacityRepository({
+      balances: [{ programId: 1, totalLimit: 1000, reservedAmount: 250, updatedAt: NOW }],
+    });
+    const service = createService(repository);
+
+    await expect(service.reconcileProgramSnapshot('program-1', {
+      currency: 'EUR',
+      totalLimit: 900,
+      reservedAmount: 0,
+      occurredAt: '2026-07-02T11:15:00.000Z',
+    })).rejects.toMatchObject({
+      output: { statusCode: 422 },
+    });
+
+    expect(repository.balances[0]).toMatchObject({
+      totalLimit: 1000,
+      reservedAmount: 250,
+    });
+    expect(repository.capacityEvents).toHaveLength(0);
+  });
+
+  test('rejects reconciliation reserved amount above total limit without mutating balance', async () => {
+    const repository = new FakeCapacityRepository({
+      balances: [{ programId: 1, totalLimit: 1000, reservedAmount: 250, updatedAt: NOW }],
+    });
+    const service = createService(repository);
+
+    await expect(service.reconcileProgramSnapshot('program-1', {
+      currency: 'USD',
+      totalLimit: 900,
+      reservedAmount: 901,
+      occurredAt: '2026-07-02T11:15:00.000Z',
+    })).rejects.toMatchObject({
+      output: { statusCode: 400 },
+    });
+
+    expect(repository.balances[0]).toMatchObject({
+      totalLimit: 1000,
+      reservedAmount: 250,
+    });
+    expect(repository.capacityEvents).toHaveLength(0);
   });
 
   test('rejects release for an already released reservation', async () => {

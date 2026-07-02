@@ -44,11 +44,20 @@ class FakeTreasuryKafkaMessagesRepository {
 
     return message;
   }
+
+  async updateMessage(id, patch) {
+    const message = this.messages.find((item) => item.id === id);
+
+    Object.assign(message, patch);
+
+    return message;
+  }
 }
 
 const createCapacityDomainService = () => ({
   createReservation: jest.fn().mockResolvedValue({}),
   releaseReservation: jest.fn().mockResolvedValue({}),
+  reconcileProgramSnapshot: jest.fn().mockResolvedValue({}),
 });
 
 const createHandler = (repository = new FakeTreasuryKafkaMessagesRepository()) => {
@@ -159,6 +168,47 @@ describe('TreasuryKafkaMessageHandler', () => {
     expect(capacityDomainService.createReservation).not.toHaveBeenCalled();
   });
 
+  test('dispatches PROGRAM_RECONCILED messages to the reconciliation flow', async () => {
+    const { handler, repository, capacityDomainService } = createHandler();
+    const payload = {
+      messageId: 'message-reconciliation',
+      schemaVersion: 1,
+      eventType: TreasuryKafkaEventType.ProgramReconciled,
+      occurredAt: OCCURRED_AT,
+      programId: 'program-1',
+      currency: 'USD',
+      totalLimit: 1000,
+      reservedAmount: 125,
+    };
+
+    const result = await handler.handleKafkaMessage(buildMessage(payload));
+
+    expect(result.status).toBe(TreasuryKafkaHandlerResult.Processed);
+    expect(repository.messages[0]).toMatchObject({
+      messageId: 'message-reconciliation',
+      eventType: TreasuryKafkaEventType.ProgramReconciled,
+      programId: 'program-1',
+      invoiceId: null,
+      status: TreasuryKafkaMessageStatus.Processed,
+    });
+    expect(capacityDomainService.reconcileProgramSnapshot).toHaveBeenCalledWith(
+      'program-1',
+      {
+        currency: 'USD',
+        totalLimit: 1000,
+        reservedAmount: 125,
+        occurredAt: OCCURRED_AT,
+      },
+      {
+        source: CapacityEventSource.Reconciliation,
+        occurredAt: OCCURRED_AT,
+        trx: repository.lastTrx,
+      },
+    );
+    expect(capacityDomainService.createReservation).not.toHaveBeenCalled();
+    expect(capacityDomainService.releaseReservation).not.toHaveBeenCalled();
+  });
+
   test('records schema-invalid messages as rejected without applying capacity changes', async () => {
     const { handler, repository, capacityDomainService } = createHandler();
     const payload = {
@@ -182,6 +232,63 @@ describe('TreasuryKafkaMessageHandler', () => {
     });
     expect(capacityDomainService.createReservation).not.toHaveBeenCalled();
     expect(capacityDomainService.releaseReservation).not.toHaveBeenCalled();
+  });
+
+  test('records invalid reconciliation snapshots as rejected without applying capacity changes', async () => {
+    const { handler, repository, capacityDomainService } = createHandler();
+    const payload = {
+      messageId: 'message-invalid-reconciliation',
+      schemaVersion: 1,
+      eventType: TreasuryKafkaEventType.ProgramReconciled,
+      occurredAt: OCCURRED_AT,
+      programId: 'program-1',
+      currency: 'USD',
+      totalLimit: 100,
+      reservedAmount: 101,
+    };
+
+    const result = await handler.handleKafkaMessage(buildMessage(payload));
+
+    expect(result.status).toBe(TreasuryKafkaHandlerResult.Rejected);
+    expect(repository.messages[0]).toMatchObject({
+      messageId: 'message-invalid-reconciliation',
+      eventType: TreasuryKafkaEventType.ProgramReconciled,
+      invoiceId: null,
+      status: TreasuryKafkaMessageStatus.Rejected,
+      failureReason: 'reservedAmount must not exceed totalLimit',
+    });
+    expect(capacityDomainService.reconcileProgramSnapshot).not.toHaveBeenCalled();
+    expect(capacityDomainService.createReservation).not.toHaveBeenCalled();
+    expect(capacityDomainService.releaseReservation).not.toHaveBeenCalled();
+  });
+
+  test('records reconciliation domain validation failures as rejected', async () => {
+    const { handler, repository, capacityDomainService } = createHandler();
+    const domainError = new Error('Program not found');
+    const payload = {
+      messageId: 'message-reconciliation-unknown-program',
+      schemaVersion: 1,
+      eventType: TreasuryKafkaEventType.ProgramReconciled,
+      occurredAt: OCCURRED_AT,
+      programId: 'missing-program',
+      currency: 'USD',
+      totalLimit: 1000,
+      reservedAmount: 0,
+    };
+
+    domainError.isBoom = true;
+    domainError.output = { statusCode: 404 };
+    capacityDomainService.reconcileProgramSnapshot.mockRejectedValue(domainError);
+
+    const result = await handler.handleKafkaMessage(buildMessage(payload));
+
+    expect(result.status).toBe(TreasuryKafkaHandlerResult.Rejected);
+    expect(repository.messages[0]).toMatchObject({
+      messageId: 'message-reconciliation-unknown-program',
+      status: TreasuryKafkaMessageStatus.Rejected,
+      failureReason: 'Program not found',
+    });
+    expect(capacityDomainService.reconcileProgramSnapshot).toHaveBeenCalledTimes(1);
   });
 
   test('skips messages already present in the inbox', async () => {
@@ -210,5 +317,6 @@ describe('TreasuryKafkaMessageHandler', () => {
     expect(repository.messages).toHaveLength(0);
     expect(capacityDomainService.createReservation).not.toHaveBeenCalled();
     expect(capacityDomainService.releaseReservation).not.toHaveBeenCalled();
+    expect(capacityDomainService.reconcileProgramSnapshot).not.toHaveBeenCalled();
   });
 });
