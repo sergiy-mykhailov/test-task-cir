@@ -5,6 +5,8 @@
 - The service may track multiple financing programs, each with its own credit limit and currency.
 - Invoice lifecycle is owned by an external system. This service stores an external `invoice_id` on reservations and does not create a separate invoices table for the core reservation flow.
 - A repayment fully releases the related reservation. Partial repayments and partial releases are out of scope for the initial implementation.
+- Duplicate API operations are handled through external invoice identifiers, reservation status checks, database constraints, and transactions.
+- Concurrent reservation and release operations are serialized on the program capacity balance row so accepted reservations cannot exceed the program limit.
 - Kafka integration may later deliver reservation and repayment events from the treasury system. Those events should reuse the same capacity domain operations as the API.
 
 ## Installation
@@ -13,7 +15,7 @@
 
 - Install Node.js.
 
-- Copy `.env.example` to `.env` and `.env.local.example` to `.env.local`.
+- Copy `.env.example` to `.env`, `.env.local.example` to `.env.local`, and `.env.test.example` to `.env.test`.
 
 - Install npm dependencies.
 ```shell
@@ -36,6 +38,16 @@ npm run db:migrate:all
 ```
 
 ## Additional commands
+
+Run unit tests.
+```shell
+npm run test:unit
+```
+
+Run DB-backed integration tests (these tests require `.env.test`).
+```shell
+npm run test:integration
+```
 
 Stop all services.
 ```shell

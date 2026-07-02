@@ -37,6 +37,10 @@ export default class CapacityRepository {
     return this.balancesModel.query(trx).findById(programId);
   }
 
+  findBalanceByProgramIdForUpdate(programId, trx) {
+    return this.balancesModel.query(trx).findById(programId).forUpdate();
+  }
+
   createBalance(data, trx) {
     return this.balancesModel.query(trx).insert(data).returning('*');
   }
@@ -47,6 +51,10 @@ export default class CapacityRepository {
 
   findReservationByProgramAndInvoice(programId, invoiceId, trx) {
     return this.reservationsModel.query(trx).findOne({ programId, invoiceId });
+  }
+
+  findReservationByProgramAndInvoiceForUpdate(programId, invoiceId, trx) {
+    return this.reservationsModel.query(trx).findOne({ programId, invoiceId }).forUpdate();
   }
 
   createReservation(data, trx) {

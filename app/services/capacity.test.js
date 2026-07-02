@@ -11,19 +11,36 @@ class FakeCapacityRepository {
     programs = [{ id: 1, externalId: 'program-1', currency: 'USD' }],
     balances = [{ programId: 1, totalLimit: 1000, reservedAmount: 100, updatedAt: NOW }],
     reservations = [],
+    failOnCreateCapacityEvent = false,
   } = {}) {
     this.programs = programs;
     this.balances = balances;
     this.reservations = reservations;
     this.capacityEvents = [];
+    this.failOnCreateCapacityEvent = failOnCreateCapacityEvent;
+    this.lockedBalanceReads = [];
+    this.lockedReservationReads = [];
+    this.programLocks = new Map();
     this.nextProgramId = programs.reduce((max, program) =>
       Math.max(max, program.id), 0) + 1;
     this.nextReservationId = reservations.reduce((max, reservation) =>
       Math.max(max, reservation.id), 0) + 1;
   }
 
-  withTransaction(callback) {
-    return callback({});
+  async withTransaction(callback) {
+    const trx = {
+      undo: [],
+      lockReleases: [],
+    };
+
+    try {
+      return await callback(trx);
+    } catch (error) {
+      [...trx.undo].reverse().forEach((undo) => undo());
+      throw error;
+    } finally {
+      [...trx.lockReleases].reverse().forEach((release) => release());
+    }
   }
 
   findProgramByExternalId(externalId) {
@@ -34,13 +51,16 @@ class FakeCapacityRepository {
     return this.programs.find((program) => program.id === id);
   }
 
-  createProgram(data) {
+  createProgram(data, trx) {
     const program = {
       id: this.nextProgramId,
       ...data,
     };
     this.nextProgramId += 1;
     this.programs.push(program);
+    trx?.undo.push(() => {
+      this.programs = this.programs.filter((item) => item.id !== program.id);
+    });
 
     return program;
   }
@@ -49,8 +69,18 @@ class FakeCapacityRepository {
     return this.balances.find((balance) => balance.programId === programId);
   }
 
-  createBalance(data) {
+  async findBalanceByProgramIdForUpdate(programId, trx) {
+    this.lockedBalanceReads.push(programId);
+    await this.#acquireProgramLock(programId, trx);
+
+    return this.findBalanceByProgramId(programId);
+  }
+
+  createBalance(data, trx) {
     this.balances.push(data);
+    trx?.undo.push(() => {
+      this.balances = this.balances.filter((balance) => balance.programId !== data.programId);
+    });
 
     return data;
   }
@@ -60,7 +90,13 @@ class FakeCapacityRepository {
       reservation.programId === programId && reservation.invoiceId === invoiceId);
   }
 
-  createReservation(data) {
+  findReservationByProgramAndInvoiceForUpdate(programId, invoiceId) {
+    this.lockedReservationReads.push({ programId, invoiceId });
+
+    return this.findReservationByProgramAndInvoice(programId, invoiceId);
+  }
+
+  createReservation(data, trx) {
     const reservation = {
       id: this.nextReservationId,
       releasedAt: null,
@@ -68,32 +104,69 @@ class FakeCapacityRepository {
     };
     this.nextReservationId += 1;
     this.reservations.push(reservation);
+    trx?.undo.push(() => {
+      this.reservations = this.reservations.filter((item) => item.id !== reservation.id);
+    });
 
     return reservation;
   }
 
-  updateBalance(programId, patch) {
+  updateBalance(programId, patch, trx) {
     const balance = this.findBalanceByProgramId(programId);
+    const previous = Object.fromEntries(Object.keys(patch).map((key) => [key, balance[key]]));
+    trx?.undo.push(() => {
+      Object.assign(balance, previous);
+    });
     Object.assign(balance, patch);
 
     return balance;
   }
 
-  updateReservation(id, patch) {
+  updateReservation(id, patch, trx) {
     const reservation = this.reservations.find((item) => item.id === id);
+    const previous = Object.fromEntries(Object.keys(patch).map((key) => [key, reservation[key]]));
+    trx?.undo.push(() => {
+      Object.assign(reservation, previous);
+    });
     Object.assign(reservation, patch);
 
     return reservation;
   }
 
-  createCapacityEvent(data) {
+  createCapacityEvent(data, trx) {
+    if (this.failOnCreateCapacityEvent) {
+      throw new Error('Capacity event write failed');
+    }
+
     const event = {
       id: this.capacityEvents.length + 1,
       ...data,
     };
     this.capacityEvents.push(event);
+    trx?.undo.push(() => {
+      this.capacityEvents = this.capacityEvents.filter((item) => item.id !== event.id);
+    });
 
     return event;
+  }
+
+  async #acquireProgramLock(programId, trx) {
+    // Model the program balance row lock so service tests expose unsafe concurrent capacity updates.
+    const previous = this.programLocks.get(programId) || Promise.resolve();
+    let releaseCurrentLock;
+    const current = new Promise((resolve) => {
+      releaseCurrentLock = resolve;
+    });
+
+    this.programLocks.set(programId, current);
+    await previous;
+
+    trx?.lockReleases.push(() => {
+      releaseCurrentLock();
+      if (this.programLocks.get(programId) === current) {
+        this.programLocks.delete(programId);
+      }
+    });
   }
 }
 
@@ -176,6 +249,7 @@ describe('CapacityService', () => {
       invoiceId: 'invoice-1',
       amount: 200,
     });
+    expect(repository.lockedBalanceReads).toEqual([1]);
   });
 
   test('rejects reservation when capacity is insufficient', async () => {
@@ -215,6 +289,57 @@ describe('CapacityService', () => {
     })).rejects.toMatchObject({
       output: { statusCode: 409 },
     });
+    expect(repository.balances[0].reservedAmount).toBe(100);
+    expect(repository.reservations).toHaveLength(1);
+    expect(repository.capacityEvents).toHaveLength(0);
+    expect(repository.lockedBalanceReads).toEqual([1]);
+  });
+
+  test('rolls back reservation state when event writing fails', async () => {
+    const repository = new FakeCapacityRepository({ failOnCreateCapacityEvent: true });
+    const service = createService(repository);
+
+    await expect(service.createReservation('program-1', {
+      invoiceId: 'invoice-rollback',
+      amount: 200,
+      currency: 'USD',
+    })).rejects.toThrow('Capacity event write failed');
+
+    expect(repository.balances[0].reservedAmount).toBe(100);
+    expect(repository.reservations).toHaveLength(0);
+    expect(repository.capacityEvents).toHaveLength(0);
+  });
+
+  test('serializes concurrent reservations that would exceed the program limit', async () => {
+    const repository = new FakeCapacityRepository({
+      balances: [{ programId: 1, totalLimit: 1000, reservedAmount: 0, updatedAt: NOW }],
+    });
+    const service = createService(repository);
+
+    const results = await Promise.allSettled([
+      service.createReservation('program-1', {
+        invoiceId: 'invoice-concurrent-1',
+        amount: 700,
+        currency: 'USD',
+      }),
+      service.createReservation('program-1', {
+        invoiceId: 'invoice-concurrent-2',
+        amount: 700,
+        currency: 'USD',
+      }),
+    ]);
+    const fulfilled = results.filter((result) => result.status === 'fulfilled');
+    const rejected = results.filter((result) => result.status === 'rejected');
+
+    expect(fulfilled).toHaveLength(1);
+    expect(rejected).toHaveLength(1);
+    expect(rejected[0].reason).toMatchObject({
+      output: { statusCode: 409 },
+    });
+    expect(repository.balances[0].reservedAmount).toBe(700);
+    expect(repository.reservations).toHaveLength(1);
+    expect(repository.capacityEvents).toHaveLength(1);
+    expect(repository.lockedBalanceReads).toEqual([1, 1]);
   });
 
   test('rejects reservation when currency differs from program currency', async () => {
@@ -265,6 +390,8 @@ describe('CapacityService', () => {
       invoiceId: 'invoice-9',
       amount: 200,
     });
+    expect(repository.lockedBalanceReads).toEqual([1]);
+    expect(repository.lockedReservationReads).toEqual([{ programId: 1, invoiceId: 'invoice-9' }]);
   });
 
   test('rejects release for an already released reservation', async () => {
@@ -288,6 +415,11 @@ describe('CapacityService', () => {
     await expect(service.releaseReservation('program-1', 'invoice-10')).rejects.toMatchObject({
       output: { statusCode: 409 },
     });
+    expect(repository.balances[0].reservedAmount).toBe(100);
+    expect(repository.reservations[0].status).toBe(ReservationStatus.Released);
+    expect(repository.capacityEvents).toHaveLength(0);
+    expect(repository.lockedBalanceReads).toEqual([1]);
+    expect(repository.lockedReservationReads).toEqual([{ programId: 1, invoiceId: 'invoice-10' }]);
   });
 
   test('rejects release for an invoice without a reservation in the program', async () => {

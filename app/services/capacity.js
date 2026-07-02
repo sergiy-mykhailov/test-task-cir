@@ -67,7 +67,7 @@ export default class CapacityService {
 
   async createReservation(programExternalId, payload) {
     return this.repository.withTransaction(async (trx) => {
-      const { program, balance } = await this.getProgramState(programExternalId, trx);
+      const { program, balance } = await this.getProgramState(programExternalId, trx, { lockBalance: true });
       const amount = this.#getValidatedAmount(payload.amount);
 
       if (payload.currency !== program.currency) {
@@ -141,8 +141,8 @@ export default class CapacityService {
 
   async releaseReservation(programExternalId, invoiceId) {
     return this.repository.withTransaction(async (trx) => {
-      const { program, balance } = await this.getProgramState(programExternalId, trx);
-      const reservation = await this.repository.findReservationByProgramAndInvoice(
+      const { program, balance } = await this.getProgramState(programExternalId, trx, { lockBalance: true });
+      const reservation = await this.repository.findReservationByProgramAndInvoiceForUpdate(
         program.id,
         invoiceId,
         trx,
@@ -195,14 +195,16 @@ export default class CapacityService {
     });
   }
 
-  async getProgramState(programExternalId, trx) {
+  async getProgramState(programExternalId, trx, { lockBalance = false } = {}) {
     const program = await this.repository.findProgramByExternalId(programExternalId, trx);
 
     if (!program) {
       throwError('Program not found', HttpStatusCode.NotFound, { programId: programExternalId });
     }
 
-    const balance = await this.repository.findBalanceByProgramId(program.id, trx);
+    const balance = lockBalance
+      ? await this.repository.findBalanceByProgramIdForUpdate(program.id, trx)
+      : await this.repository.findBalanceByProgramId(program.id, trx);
 
     if (!balance) {
       throwError('Program capacity balance not found', HttpStatusCode.NotFound, {
