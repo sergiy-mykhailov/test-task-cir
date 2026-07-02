@@ -6,6 +6,7 @@ export default [
     method: 'GET',
     path: '/health',
     options: {
+      auth: false,
       handler: HealthHandler.getStatus,
       description: 'Service and database health check',
       response: {

@@ -19,9 +19,10 @@ const prettyPrintProps = isProd
 export default {
   plugin: HapiPino,
   options: {
-    ignorePaths: ['/health', '/ping'],
+    ignorePaths: ['/health'],
     logPayload: true,
     logRouteTags: true,
+    redact: ['req.headers.authorization'],
     ...prettyPrintProps,
   },
 };

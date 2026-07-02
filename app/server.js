@@ -4,6 +4,7 @@ import { service } from './constants/env.js';
 import { failAction } from './utils/validation.js';
 import routes from './plugins/routes.js';
 import logger from './plugins/logger.js';
+import auth from './plugins/auth.js';
 import errorHandler from './plugins/error-handler.js';
 import database from './plugins/database.js';
 import shutdown from './plugins/shutdown.js';
@@ -22,6 +23,7 @@ const options = {
 const plugins = [
   inert,
   logger,
+  auth,
   routes,
   errorHandler,
   database,

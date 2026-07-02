@@ -2,7 +2,12 @@ export const NODE_ENV_PRODUCTION = 'production';
 
 export const isProd = process.env.NODE_ENV === NODE_ENV_PRODUCTION;
 
-export const app = { isProd };
+export const app = {
+  isProd,
+  get apiToken() {
+    return process.env.API_TOKEN;
+  },
+};
 
 export const service = {
   host: process.env.SERVICE_HOST,

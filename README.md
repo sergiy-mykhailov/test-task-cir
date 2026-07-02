@@ -8,6 +8,8 @@
 - Duplicate API operations are handled through external invoice identifiers, reservation status checks, database constraints, and transactions.
 - Concurrent reservation and release operations are serialized on the program capacity balance row so accepted reservations cannot exceed the program limit.
 - FX rates are managed locally in the service.
+- The service is assumed to be consumed by other API services, so authentication uses a simple static API token instead of user sessions, OAuth/OIDC, or JWT issuance.
+- `GET /health` is intentionally unauthenticated because clustered deployments commonly use unauthenticated liveness and readiness checks.
 - Kafka integration may later deliver reservation and repayment events from the treasury system. Those events should reuse the same capacity domain operations as the API.
 
 ## Installation
@@ -17,6 +19,8 @@
 - Install Node.js.
 
 - Copy `.env.example` to `.env`, `.env.local.example` to `.env.local`, and `.env.test.example` to `.env.test`.
+
+- Set `API_TOKEN` in `.env` for the local service runtime.
 
 - Install npm dependencies.
 ```shell
