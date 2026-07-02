@@ -7,6 +7,7 @@ import logger from './plugins/logger.js';
 import auth from './plugins/auth.js';
 import errorHandler from './plugins/error-handler.js';
 import database from './plugins/database.js';
+import kafka from './plugins/kafka.js';
 import shutdown from './plugins/shutdown.js';
 
 const options = {
@@ -27,6 +28,7 @@ const plugins = [
   routes,
   errorHandler,
   database,
+  kafka,
   shutdown,
 ];
 

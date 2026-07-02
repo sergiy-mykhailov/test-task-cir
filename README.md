@@ -10,7 +10,7 @@
 - FX rates are managed locally in the service.
 - The service is assumed to be consumed by other API services, so authentication uses a simple static API token instead of user sessions, OAuth/OIDC, or JWT issuance.
 - `GET /health` is intentionally unauthenticated because clustered deployments commonly use unauthenticated liveness and readiness checks.
-- Kafka integration may later deliver reservation and repayment events from the treasury system. Those events should reuse the same capacity domain operations as the API.
+- Kafka integration delivers reservation and repayment events from the treasury system through the same capacity domain operations as the API.
 
 ## Installation
 
@@ -54,6 +54,16 @@ Run DB-backed integration tests (these tests require `.env.test`).
 npm run test:integration
 ```
 
+Produce a local treasury reservation message through Kafka.
+```shell
+PROGRAM_ID=p-1 INVOICE_ID=i-4 AMOUNT=1000 CURRENCY=EUR npm run kafka:produce:reservation
+```
+
+Produce a local treasury repayment message through Kafka.
+```shell
+PROGRAM_ID=p-1 INVOICE_ID=i-4 npm run kafka:produce:release
+```
+
 Stop all services.
 ```shell
 docker-compose stop
@@ -66,3 +76,12 @@ docker-compose stop
 - `GET /programs/{programId}/capacity` returns total, reserved, and available capacity.
 - `POST /programs/{programId}/reservations` reserves capacity for an external invoice.
 - `POST /programs/{programId}/invoices/{invoiceId}/release` fully releases an existing reservation after repayment.
+
+## Kafka Treasury Ingestion
+
+- `cir-kafka` runs as a real single-node Kafka broker in local Compose using pinned image `apache/kafka:4.3.1`.
+- The service consumes `treasury.capacity.events` when `KAFKA_ENABLED=true`.
+- On startup, the service waits for Kafka readiness and creates/confirms the local topic before subscribing.
+- `RESERVATION_APPROVED` messages create reservations with `source = KAFKA_TREASURY`.
+- `INVOICE_REPAID` messages release existing reservations with `source = KAFKA_TREASURY`.
+- `treasury_kafka_messages` stores processed and rejected Kafka messages for idempotency and malformed-message audit records.

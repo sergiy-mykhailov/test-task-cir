@@ -109,8 +109,12 @@ export default class CapacityService {
     });
   }
 
-  async createReservation(programExternalId, payload) {
-    return this.repository.withTransaction(async (trx) => {
+  async createReservation(programExternalId, payload, {
+    source = CapacityEventSource.Api,
+    occurredAt,
+    trx,
+  } = {}) {
+    return this.#withTransaction(trx, async (trx) => {
       const { program, balance } = await this.getProgramState(programExternalId, trx, { lockBalance: true });
       const invoiceAmount = this.#getValidatedAmount(payload.amount);
 
@@ -128,12 +132,12 @@ export default class CapacityService {
         );
       }
 
-      const occurredAt = toTimestamp(this.now());
+      const reservationOccurredAt = toTimestamp(occurredAt || this.now());
       const { amount, fxRateId } = await this.#resolveReservationAmount({
         program,
         invoiceAmount,
         invoiceCurrency: payload.currency,
-        occurredAt,
+        occurredAt: reservationOccurredAt,
         trx,
       });
       const availableAmount = balance.totalLimit - balance.reservedAmount;
@@ -156,26 +160,26 @@ export default class CapacityService {
         fxRateId,
         status: ReservationStatus.Reserved,
         releasedAmount: 0,
-        reservedAt: occurredAt,
-        createdAt: occurredAt,
-        updatedAt: occurredAt,
+        reservedAt: reservationOccurredAt,
+        createdAt: reservationOccurredAt,
+        updatedAt: reservationOccurredAt,
       }, trx);
 
       const updatedBalance = await this.repository.updateBalance(program.id, {
         reservedAmount: balance.reservedAmount + amount,
-        updatedAt: occurredAt,
+        updatedAt: reservationOccurredAt,
       }, trx);
 
       await this.repository.createCapacityEvent({
         programId: program.id,
         reservationId: reservation.id,
         eventType: CapacityEventType.ReservationCreated,
-        source: CapacityEventSource.Api,
+        source,
         invoiceId: payload.invoiceId,
         amount,
         currency: program.currency,
-        occurredAt,
-        createdAt: occurredAt,
+        occurredAt: reservationOccurredAt,
+        createdAt: reservationOccurredAt,
       }, trx);
 
       return {
@@ -185,8 +189,12 @@ export default class CapacityService {
     });
   }
 
-  async releaseReservation(programExternalId, invoiceId) {
-    return this.repository.withTransaction(async (trx) => {
+  async releaseReservation(programExternalId, invoiceId, {
+    source = CapacityEventSource.Api,
+    occurredAt,
+    trx,
+  } = {}) {
+    return this.#withTransaction(trx, async (trx) => {
       const { program, balance } = await this.getProgramState(programExternalId, trx, { lockBalance: true });
       const reservation = await this.repository.findReservationByProgramAndInvoiceForUpdate(
         program.id,
@@ -210,28 +218,28 @@ export default class CapacityService {
       }
 
       const amount = reservation.amount;
-      const occurredAt = toTimestamp(this.now());
+      const releaseOccurredAt = toTimestamp(occurredAt || this.now());
       const updatedReservation = await this.repository.updateReservation(reservation.id, {
         status: ReservationStatus.Released,
         releasedAmount: amount,
-        releasedAt: occurredAt,
-        updatedAt: occurredAt,
+        releasedAt: releaseOccurredAt,
+        updatedAt: releaseOccurredAt,
       }, trx);
       const updatedBalance = await this.repository.updateBalance(program.id, {
         reservedAmount: balance.reservedAmount - amount,
-        updatedAt: occurredAt,
+        updatedAt: releaseOccurredAt,
       }, trx);
 
       await this.repository.createCapacityEvent({
         programId: program.id,
         reservationId: reservation.id,
         eventType: CapacityEventType.ReservationReleased,
-        source: CapacityEventSource.Api,
+        source,
         invoiceId: reservation.invoiceId,
         amount,
         currency: program.currency,
-        occurredAt,
-        createdAt: occurredAt,
+        occurredAt: releaseOccurredAt,
+        createdAt: releaseOccurredAt,
       }, trx);
 
       return {
@@ -259,6 +267,10 @@ export default class CapacityService {
     }
 
     return { program, balance };
+  }
+
+  #withTransaction(trx, callback) {
+    return trx ? callback(trx) : this.repository.withTransaction(callback);
   }
 
   #getValidatedAmount(amount, fieldName = 'amount') {

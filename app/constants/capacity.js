@@ -14,3 +14,13 @@ export const CapacityEventSource = Object.freeze({
   KafkaTreasury: 'KAFKA_TREASURY',
   Reconciliation: 'RECONCILIATION',
 });
+
+export const TreasuryKafkaEventType = Object.freeze({
+  ReservationApproved: 'RESERVATION_APPROVED',
+  InvoiceRepaid: 'INVOICE_REPAID',
+});
+
+export const TreasuryKafkaMessageStatus = Object.freeze({
+  Processed: 'PROCESSED',
+  Rejected: 'REJECTED',
+});
