@@ -19,14 +19,19 @@
 
 - Install Node.js.
 
-- Copy `.env.example` to `.env`, `.env.local.example` to `.env.local`, and `.env.test.example` to `.env.test`.
-
-- Set `API_TOKEN` in `.env` for the local service runtime.
-
 - Install npm dependencies.
 ```shell
 npm ci
 ```
+
+- Copy environment examples.
+```shell
+cp .env.example .env
+cp .env.local.example .env.local
+cp .env.test.example .env.test
+```
+
+- Set `API_TOKEN` in `.env`.
 
 - Start all services.
 ```shell

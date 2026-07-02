@@ -8,7 +8,7 @@ import {
   bufferToString,
   isNonEmptyString,
   toTimestamp,
-} from '../utils/format.js';
+} from '../utils/common.js';
 import { capacityService } from './capacity.js';
 
 export const TreasuryKafkaHandlerResult = Object.freeze({

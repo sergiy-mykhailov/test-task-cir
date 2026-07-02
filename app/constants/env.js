@@ -1,7 +1,7 @@
 import {
   parseBoolean,
   parseList,
-} from '../utils/format.js';
+} from '../utils/common.js';
 
 export const NODE_ENV_PRODUCTION = 'production';
 

@@ -6,7 +6,7 @@ import {
 import { HttpStatusCode } from '../constants/http.js';
 import CapacityRepository from '../repositories/capacity.js';
 import { throwError } from '../utils/errors.js';
-import { toAmount, toTimestamp } from '../utils/format.js';
+import { toAmount, toTimestamp } from '../utils/common.js';
 
 export default class CapacityService {
   constructor({
