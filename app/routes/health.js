@@ -1,16 +1,17 @@
-import Joi from 'joi';
+import * as validator from '../validators/health.js';
+import { HealthHandler } from '../handlers/health.js';
 
 export default [
   {
     method: 'GET',
-    path: '/ping',
+    path: '/health',
     options: {
-      handler: () => 'pong',
-      description: 'Health check ping',
+      handler: HealthHandler.getStatus,
+      description: 'Service and database health check',
       response: {
         failAction: 'log',
         status: {
-          200: Joi.string(),
+          200: validator.getHealth.res,
         },
       },
     },

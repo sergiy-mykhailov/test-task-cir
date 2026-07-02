@@ -149,3 +149,5 @@ vite.config.ts.timestamp-*
 db/*
 !db/.gitkeep
 /docs/work-plan.md
+/docs/work-plan-archive
+AGENTS.md

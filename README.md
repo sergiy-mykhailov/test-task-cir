@@ -2,30 +2,30 @@
 
 ## Installation
 
-- Install Docker
+- Install Docker.
 
-- Install Node.js
+- Install Node.js.
 
-- Copy `.env.example` to `.env` and `.env.local.example` -> `.env.local`
+- Copy `.env.example` to `.env` and `.env.local.example` to `.env.local`.
 
-- Install npm dependencies
+- Install npm dependencies.
 ```shell
 npm ci
 ```
 
-- Start all
+- Start all services.
 ```shell
 docker-compose up -d
 ```
 
-- Create a database
+- Create a database (for the first run only)
 ```shell
 npm run db:create
 ```
 
 ## Additional commands
 
-Stop all
+Stop all services.
 ```shell
 docker-compose stop
 ```

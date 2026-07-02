@@ -11,6 +11,9 @@ const register = async (server) => {
 
   const knex = Knex(config);
 
+  // Fail startup early when the configured Postgres database is unreachable.
+  await knex.raw('select 1');
+
   Model.knex(knex);
 
   server.app.knex = knex;
