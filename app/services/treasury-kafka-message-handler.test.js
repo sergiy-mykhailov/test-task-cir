@@ -291,6 +291,102 @@ describe('TreasuryKafkaMessageHandler', () => {
     expect(capacityDomainService.reconcileProgramSnapshot).toHaveBeenCalledTimes(1);
   });
 
+  test('records reservation domain validation failures as rejected', async () => {
+    const { handler, repository, capacityDomainService } = createHandler();
+    const domainError = new Error('Missing FX rate');
+    const payload = {
+      messageId: 'message-reservation-missing-fx-rate',
+      schemaVersion: 1,
+      eventType: TreasuryKafkaEventType.ReservationApproved,
+      occurredAt: OCCURRED_AT,
+      programId: 'program-1',
+      invoiceId: 'invoice-1',
+      amount: 125,
+      currency: 'EUR',
+    };
+
+    domainError.isBoom = true;
+    domainError.output = { statusCode: 422 };
+    capacityDomainService.createReservation.mockRejectedValue(domainError);
+
+    const result = await handler.handleKafkaMessage(buildMessage(payload));
+
+    expect(result.status).toBe(TreasuryKafkaHandlerResult.Rejected);
+    expect(repository.messages[0]).toMatchObject({
+      messageId: 'message-reservation-missing-fx-rate',
+      eventType: TreasuryKafkaEventType.ReservationApproved,
+      status: TreasuryKafkaMessageStatus.Rejected,
+      failureReason: 'Missing FX rate',
+    });
+    expect(capacityDomainService.createReservation).toHaveBeenCalledTimes(1);
+  });
+
+  test('records release domain validation failures as rejected', async () => {
+    const { handler, repository, capacityDomainService } = createHandler();
+    const domainError = new Error('Reservation not found');
+    const payload = {
+      messageId: 'message-release-missing-reservation',
+      schemaVersion: 1,
+      eventType: TreasuryKafkaEventType.InvoiceRepaid,
+      occurredAt: OCCURRED_AT,
+      programId: 'program-1',
+      invoiceId: 'invoice-1',
+    };
+
+    domainError.isBoom = true;
+    domainError.output = { statusCode: 404 };
+    capacityDomainService.releaseReservation.mockRejectedValue(domainError);
+
+    const result = await handler.handleKafkaMessage(buildMessage(payload));
+
+    expect(result.status).toBe(TreasuryKafkaHandlerResult.Rejected);
+    expect(repository.messages[0]).toMatchObject({
+      messageId: 'message-release-missing-reservation',
+      eventType: TreasuryKafkaEventType.InvoiceRepaid,
+      status: TreasuryKafkaMessageStatus.Rejected,
+      failureReason: 'Reservation not found',
+    });
+    expect(capacityDomainService.releaseReservation).toHaveBeenCalledTimes(1);
+  });
+
+  test('throws non-Boom domain errors so Kafka can redeliver retryable failures', async () => {
+    const { handler, capacityDomainService } = createHandler();
+    const domainError = new Error('database unavailable');
+    const payload = {
+      messageId: 'message-reservation-retryable-error',
+      schemaVersion: 1,
+      eventType: TreasuryKafkaEventType.ReservationApproved,
+      occurredAt: OCCURRED_AT,
+      programId: 'program-1',
+      invoiceId: 'invoice-1',
+      amount: 125,
+      currency: 'USD',
+    };
+
+    capacityDomainService.createReservation.mockRejectedValue(domainError);
+
+    await expect(handler.handleKafkaMessage(buildMessage(payload))).rejects.toThrow('database unavailable');
+  });
+
+  test('throws Boom 5xx domain errors so Kafka can redeliver retryable failures', async () => {
+    const { handler, capacityDomainService } = createHandler();
+    const domainError = new Error('Capacity write failed');
+    const payload = {
+      messageId: 'message-release-retryable-error',
+      schemaVersion: 1,
+      eventType: TreasuryKafkaEventType.InvoiceRepaid,
+      occurredAt: OCCURRED_AT,
+      programId: 'program-1',
+      invoiceId: 'invoice-1',
+    };
+
+    domainError.isBoom = true;
+    domainError.output = { statusCode: 500 };
+    capacityDomainService.releaseReservation.mockRejectedValue(domainError);
+
+    await expect(handler.handleKafkaMessage(buildMessage(payload))).rejects.toThrow('Capacity write failed');
+  });
+
   test('skips messages already present in the inbox', async () => {
     const duplicate = {
       id: 42,

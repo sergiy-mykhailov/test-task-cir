@@ -287,6 +287,124 @@ describe('TreasuryKafkaMessageHandler integration', () => {
     expect(await countAllEvents()).toBe(0);
   });
 
+  test('records terminal reservation domain failures as rejected without mutating capacity', async () => {
+    const service = createService();
+    const handler = createHandler();
+    const programExternalId = nextProgramId();
+
+    await service.createProgram({
+      externalId: programExternalId,
+      currency: 'USD',
+      totalLimit: 1000,
+    });
+
+    const result = await handler.handleKafkaMessage(buildKafkaMessage({
+      messageId: 'kafka-message-reservation-terminal-4xx',
+      schemaVersion: 1,
+      eventType: TreasuryKafkaEventType.ReservationApproved,
+      occurredAt: '2026-07-02T11:30:00.000Z',
+      programId: programExternalId,
+      invoiceId: 'invoice-terminal-reservation',
+      amount: 125,
+      currency: 'EUR',
+    }, {
+      offset: '15',
+    }));
+    const program = await findProgram(programExternalId);
+    const balance = await findBalance(program.id);
+    const reservations = await findReservations(program.id);
+    const messages = await findKafkaMessages();
+
+    expect(result.status).toBe(TreasuryKafkaHandlerResult.Rejected);
+    expect(messages).toHaveLength(1);
+    expect(messages[0]).toMatchObject({
+      messageId: 'kafka-message-reservation-terminal-4xx',
+      eventType: TreasuryKafkaEventType.ReservationApproved,
+      programId: programExternalId,
+      invoiceId: 'invoice-terminal-reservation',
+      status: TreasuryKafkaMessageStatus.Rejected,
+      failureReason: 'No usable FX rate found for reservation currency',
+    });
+    expect(balance).toMatchObject({
+      totalLimit: 1000,
+      reservedAmount: 0,
+    });
+    expect(reservations).toHaveLength(0);
+    expect(await countEvents(program.id, CapacityEventType.ReservationCreated)).toBe(0);
+  });
+
+  test('records terminal release domain failures as rejected without mutating capacity', async () => {
+    const service = createService();
+    const handler = createHandler();
+    const programExternalId = nextProgramId();
+
+    await service.createProgram({
+      externalId: programExternalId,
+      currency: 'USD',
+      totalLimit: 1000,
+    });
+
+    const result = await handler.handleKafkaMessage(buildKafkaMessage({
+      messageId: 'kafka-message-release-terminal-4xx',
+      schemaVersion: 1,
+      eventType: TreasuryKafkaEventType.InvoiceRepaid,
+      occurredAt: '2026-07-02T11:45:00.000Z',
+      programId: programExternalId,
+      invoiceId: 'invoice-missing-release',
+    }, {
+      offset: '16',
+    }));
+    const program = await findProgram(programExternalId);
+    const balance = await findBalance(program.id);
+    const reservations = await findReservations(program.id);
+    const messages = await findKafkaMessages();
+
+    expect(result.status).toBe(TreasuryKafkaHandlerResult.Rejected);
+    expect(messages).toHaveLength(1);
+    expect(messages[0]).toMatchObject({
+      messageId: 'kafka-message-release-terminal-4xx',
+      eventType: TreasuryKafkaEventType.InvoiceRepaid,
+      programId: programExternalId,
+      invoiceId: 'invoice-missing-release',
+      status: TreasuryKafkaMessageStatus.Rejected,
+      failureReason: 'Reservation not found',
+    });
+    expect(balance).toMatchObject({
+      totalLimit: 1000,
+      reservedAmount: 0,
+    });
+    expect(reservations).toHaveLength(0);
+    expect(await countEvents(program.id, CapacityEventType.ReservationReleased)).toBe(0);
+  });
+
+  test('throws retryable domain failures and rolls back the inbox row', async () => {
+    const retryableError = new Error('database unavailable');
+    const handler = new TreasuryKafkaMessageHandler({
+      now: () => NOW,
+      capacityDomainService: {
+        createReservation: async () => {
+          throw retryableError;
+        },
+      },
+    });
+
+    await expect(handler.handleKafkaMessage(buildKafkaMessage({
+      messageId: 'kafka-message-retryable-domain-error',
+      schemaVersion: 1,
+      eventType: TreasuryKafkaEventType.ReservationApproved,
+      occurredAt: '2026-07-02T11:30:00.000Z',
+      programId: 'program-retryable',
+      invoiceId: 'invoice-retryable',
+      amount: 125,
+      currency: 'USD',
+    }, {
+      offset: '17',
+    }))).rejects.toThrow('database unavailable');
+
+    expect(await findKafkaMessages()).toHaveLength(0);
+    expect(await countAllEvents()).toBe(0);
+  });
+
   test('processes reconciliation snapshots by overwriting the balance projection only', async () => {
     const service = createService();
     const handler = createHandler();

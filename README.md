@@ -12,6 +12,7 @@
 - `GET /health` is intentionally unauthenticated because clustered deployments commonly use unauthenticated liveness and readiness checks.
 - Kafka integration delivers reservation and repayment events from the treasury system through the same capacity domain operations as the API.
 - Bulk reconciliation snapshots update `program_capacity_balances` only. Existing `reservations` are not rebuilt or modified from snapshots.
+- Structurally valid Kafka messages that fail with terminal capacity-domain `4xx` errors are recorded as rejected inbox messages and skipped; retryable non-Boom and `5xx` failures still throw so Kafka can redeliver them.
 
 ## Installation
 
@@ -97,3 +98,4 @@ docker-compose stop
 - `INVOICE_REPAID` messages release existing reservations with `source = KAFKA_TREASURY`.
 - `PROGRAM_RECONCILED` messages overwrite the capacity balance projection with `source = RECONCILIATION` and leave reservation rows unchanged.
 - `treasury_kafka_messages` stores processed and rejected Kafka messages for idempotency and malformed-message audit records.
+- Terminal capacity-domain `4xx` failures are stored with `status = REJECTED` and do not mutate reservations, capacity balances, or capacity events.

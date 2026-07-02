@@ -67,7 +67,7 @@ export default class TreasuryKafkaMessageHandler {
       try {
         await this.#applyDomainOperation(parsed.payload, trx);
       } catch (error) {
-        // Reconciliation 4xx domain failures are terminal snapshot problems, not retryable broker errors.
+        // Supported-event Boom 4xx domain failures are terminal business-invalid messages, not retryable broker errors.
         if (this.#shouldRejectDomainError(parsed.payload, error)) {
           const rejectedMessage = await this.repository.updateMessage(message.id, {
             status: TreasuryKafkaMessageStatus.Rejected,
@@ -162,7 +162,8 @@ export default class TreasuryKafkaMessageHandler {
   }
 
   #shouldRejectDomainError(payload, error) {
-    return payload.eventType === TreasuryKafkaEventType.ProgramReconciled
+    // Domain Boom 4xx failures are terminal business-invalid messages; retryable errors must still throw.
+    return Object.values(TreasuryKafkaEventType).includes(payload.eventType)
       && error?.isBoom
       && error.output?.statusCode >= 400
       && error.output?.statusCode < 500;
