@@ -1,4 +1,10 @@
 import BaseModel from './base-model.js';
+import {
+  DECIMAL_STRING_MAX_LENGTH,
+  DECIMAL_STRING_PATTERN,
+  POSITIVE_DECIMAL_STRING_PATTERN,
+  isDecimalGreaterThan,
+} from '../utils/decimal.js';
 
 export default class ProgramCapacityBalances extends BaseModel {
   static get tableName() {
@@ -16,8 +22,16 @@ export default class ProgramCapacityBalances extends BaseModel {
       required: ['programId', 'totalLimit', 'reservedAmount'],
       properties: {
         programId: { type: 'integer', minimum: 1 },
-        totalLimit: { type: 'number', minimum: 0 },
-        reservedAmount: { type: 'number', minimum: 0 },
+        totalLimit: {
+          type: 'string',
+          maxLength: DECIMAL_STRING_MAX_LENGTH,
+          pattern: POSITIVE_DECIMAL_STRING_PATTERN.source,
+        },
+        reservedAmount: {
+          type: 'string',
+          maxLength: DECIMAL_STRING_MAX_LENGTH,
+          pattern: DECIMAL_STRING_PATTERN.source,
+        },
         updatedAt: { type: 'string', format: 'date-time' },
       },
     };
@@ -28,7 +42,7 @@ export default class ProgramCapacityBalances extends BaseModel {
   }
 
   validateReservedAmount() {
-    if (this.reservedAmount > this.totalLimit) {
+    if (isDecimalGreaterThan(this.reservedAmount, this.totalLimit)) {
       throw new Error('Reserved amount cannot exceed total limit');
     }
   }

@@ -8,6 +8,10 @@ import {
   prepareTreasuryTopic,
 } from '../app/kafka/topic-readiness.js';
 import { createKafkaLogPolicy } from '../app/kafka/log-policy.js';
+import {
+  isDecimalString,
+  isPositiveDecimalString,
+} from '../app/utils/decimal.js';
 
 const readRequiredEnv = (name) => {
   const value = process.env[name];
@@ -25,21 +29,31 @@ const readOptionalEnv = (name, defaultValue) => {
   return value && value.trim() ? value.trim() : defaultValue;
 };
 
-const readPositiveAmount = (name = 'AMOUNT') => {
-  const amount = Number(readRequiredEnv(name));
+const readRequiredDecimalEnv = (name) => {
+  const value = process.env[name];
 
-  if (!Number.isFinite(amount) || amount <= 0) {
-    throw new Error(`${name} must be a positive number.`);
+  if (value === undefined || value.length === 0) {
+    throw new Error(`${name} is required.`);
+  }
+
+  return value;
+};
+
+const readPositiveAmount = (name = 'AMOUNT') => {
+  const amount = readRequiredDecimalEnv(name);
+
+  if (!isPositiveDecimalString(amount)) {
+    throw new Error(`${name} must be a positive decimal string.`);
   }
 
   return amount;
 };
 
 const readNonNegativeAmount = (name) => {
-  const amount = Number(readRequiredEnv(name));
+  const amount = readRequiredDecimalEnv(name);
 
-  if (!Number.isFinite(amount) || amount < 0) {
-    throw new Error(`${name} must be a non-negative number.`);
+  if (!isDecimalString(amount)) {
+    throw new Error(`${name} must be a non-negative decimal string.`);
   }
 
   return amount;
@@ -63,7 +77,7 @@ export const getProducerKafkaConfig = () => ({
 
 const buildBaseMessage = (eventType) => ({
   messageId: readOptionalEnv('MESSAGE_ID', randomUUID()),
-  schemaVersion: 1,
+  schemaVersion: 2,
   eventType,
   occurredAt: readOptionalEnv('OCCURRED_AT', new Date().toISOString()),
   programId: readRequiredEnv('PROGRAM_ID'),

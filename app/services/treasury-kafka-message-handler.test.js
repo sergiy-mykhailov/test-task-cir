@@ -95,12 +95,12 @@ describe('TreasuryKafkaMessageHandler', () => {
     const { handler, repository, capacityDomainService } = createHandler();
     const payload = {
       messageId: 'message-1',
-      schemaVersion: 1,
+      schemaVersion: 2,
       eventType: TreasuryKafkaEventType.ReservationApproved,
       occurredAt: OCCURRED_AT,
       programId: 'program-1',
       invoiceId: 'invoice-1',
-      amount: 125,
+      amount: '125',
       currency: 'USD',
     };
 
@@ -113,7 +113,7 @@ describe('TreasuryKafkaMessageHandler', () => {
       partition: 0,
       messageOffset: '1',
       messageKey: 'program-1',
-      schemaVersion: 1,
+      schemaVersion: 2,
       eventType: TreasuryKafkaEventType.ReservationApproved,
       programId: 'program-1',
       invoiceId: 'invoice-1',
@@ -125,7 +125,7 @@ describe('TreasuryKafkaMessageHandler', () => {
       'program-1',
       {
         invoiceId: 'invoice-1',
-        amount: 125,
+        amount: '125',
         currency: 'USD',
       },
       {
@@ -141,7 +141,7 @@ describe('TreasuryKafkaMessageHandler', () => {
     const { handler, repository, capacityDomainService } = createHandler();
     const payload = {
       messageId: 'message-2',
-      schemaVersion: 1,
+      schemaVersion: 2,
       eventType: TreasuryKafkaEventType.InvoiceRepaid,
       occurredAt: OCCURRED_AT,
       programId: 'program-1',
@@ -172,13 +172,13 @@ describe('TreasuryKafkaMessageHandler', () => {
     const { handler, repository, capacityDomainService } = createHandler();
     const payload = {
       messageId: 'message-reconciliation',
-      schemaVersion: 1,
+      schemaVersion: 2,
       eventType: TreasuryKafkaEventType.ProgramReconciled,
       occurredAt: OCCURRED_AT,
       programId: 'program-1',
       currency: 'USD',
-      totalLimit: 1000,
-      reservedAmount: 125,
+      totalLimit: '1000',
+      reservedAmount: '125',
     };
 
     const result = await handler.handleKafkaMessage(buildMessage(payload));
@@ -195,8 +195,8 @@ describe('TreasuryKafkaMessageHandler', () => {
       'program-1',
       {
         currency: 'USD',
-        totalLimit: 1000,
-        reservedAmount: 125,
+        totalLimit: '1000',
+        reservedAmount: '125',
         occurredAt: OCCURRED_AT,
       },
       {
@@ -213,12 +213,12 @@ describe('TreasuryKafkaMessageHandler', () => {
     const { handler, repository, capacityDomainService } = createHandler();
     const payload = {
       messageId: 'message-invalid',
-      schemaVersion: 1,
+      schemaVersion: 2,
       eventType: TreasuryKafkaEventType.ReservationApproved,
       occurredAt: OCCURRED_AT,
       programId: 'program-1',
       invoiceId: 'invoice-1',
-      amount: 125,
+      amount: '125',
       currency: 'usd',
     };
 
@@ -234,17 +234,65 @@ describe('TreasuryKafkaMessageHandler', () => {
     expect(capacityDomainService.releaseReservation).not.toHaveBeenCalled();
   });
 
+  test('rejects retired schema version 1 without applying capacity changes', async () => {
+    const { handler, repository, capacityDomainService } = createHandler();
+    const payload = {
+      messageId: 'message-version-1',
+      schemaVersion: 1,
+      eventType: TreasuryKafkaEventType.ReservationApproved,
+      occurredAt: OCCURRED_AT,
+      programId: 'program-1',
+      invoiceId: 'invoice-1',
+      amount: '125',
+      currency: 'USD',
+    };
+
+    const result = await handler.handleKafkaMessage(buildMessage(payload));
+
+    expect(result.status).toBe(TreasuryKafkaHandlerResult.Rejected);
+    expect(repository.messages[0]).toMatchObject({
+      schemaVersion: 1,
+      status: TreasuryKafkaMessageStatus.Rejected,
+      failureReason: 'schemaVersion must be 2',
+    });
+    expect(capacityDomainService.createReservation).not.toHaveBeenCalled();
+  });
+
+  test('rejects version 2 numeric monetary fields without applying capacity changes', async () => {
+    const { handler, repository, capacityDomainService } = createHandler();
+    const payload = {
+      messageId: 'message-numeric-amount',
+      schemaVersion: 2,
+      eventType: TreasuryKafkaEventType.ReservationApproved,
+      occurredAt: OCCURRED_AT,
+      programId: 'program-1',
+      invoiceId: 'invoice-1',
+      amount: 125,
+      currency: 'USD',
+    };
+
+    const result = await handler.handleKafkaMessage(buildMessage(payload));
+
+    expect(result.status).toBe(TreasuryKafkaHandlerResult.Rejected);
+    expect(repository.messages[0]).toMatchObject({
+      schemaVersion: 2,
+      status: TreasuryKafkaMessageStatus.Rejected,
+      failureReason: 'amount must be positive',
+    });
+    expect(capacityDomainService.createReservation).not.toHaveBeenCalled();
+  });
+
   test('records invalid reconciliation snapshots as rejected without applying capacity changes', async () => {
     const { handler, repository, capacityDomainService } = createHandler();
     const payload = {
       messageId: 'message-invalid-reconciliation',
-      schemaVersion: 1,
+      schemaVersion: 2,
       eventType: TreasuryKafkaEventType.ProgramReconciled,
       occurredAt: OCCURRED_AT,
       programId: 'program-1',
       currency: 'USD',
-      totalLimit: 100,
-      reservedAmount: 101,
+      totalLimit: '100',
+      reservedAmount: '101',
     };
 
     const result = await handler.handleKafkaMessage(buildMessage(payload));
@@ -267,13 +315,13 @@ describe('TreasuryKafkaMessageHandler', () => {
     const domainError = new Error('Program not found');
     const payload = {
       messageId: 'message-reconciliation-unknown-program',
-      schemaVersion: 1,
+      schemaVersion: 2,
       eventType: TreasuryKafkaEventType.ProgramReconciled,
       occurredAt: OCCURRED_AT,
       programId: 'missing-program',
       currency: 'USD',
-      totalLimit: 1000,
-      reservedAmount: 0,
+      totalLimit: '1000',
+      reservedAmount: '0',
     };
 
     domainError.isBoom = true;
@@ -296,12 +344,12 @@ describe('TreasuryKafkaMessageHandler', () => {
     const domainError = new Error('Missing FX rate');
     const payload = {
       messageId: 'message-reservation-missing-fx-rate',
-      schemaVersion: 1,
+      schemaVersion: 2,
       eventType: TreasuryKafkaEventType.ReservationApproved,
       occurredAt: OCCURRED_AT,
       programId: 'program-1',
       invoiceId: 'invoice-1',
-      amount: 125,
+      amount: '125',
       currency: 'EUR',
     };
 
@@ -326,7 +374,7 @@ describe('TreasuryKafkaMessageHandler', () => {
     const domainError = new Error('Reservation not found');
     const payload = {
       messageId: 'message-release-missing-reservation',
-      schemaVersion: 1,
+      schemaVersion: 2,
       eventType: TreasuryKafkaEventType.InvoiceRepaid,
       occurredAt: OCCURRED_AT,
       programId: 'program-1',
@@ -354,12 +402,12 @@ describe('TreasuryKafkaMessageHandler', () => {
     const domainError = new Error('database unavailable');
     const payload = {
       messageId: 'message-reservation-retryable-error',
-      schemaVersion: 1,
+      schemaVersion: 2,
       eventType: TreasuryKafkaEventType.ReservationApproved,
       occurredAt: OCCURRED_AT,
       programId: 'program-1',
       invoiceId: 'invoice-1',
-      amount: 125,
+      amount: '125',
       currency: 'USD',
     };
 
@@ -373,7 +421,7 @@ describe('TreasuryKafkaMessageHandler', () => {
     const domainError = new Error('Capacity write failed');
     const payload = {
       messageId: 'message-release-retryable-error',
-      schemaVersion: 1,
+      schemaVersion: 2,
       eventType: TreasuryKafkaEventType.InvoiceRepaid,
       occurredAt: OCCURRED_AT,
       programId: 'program-1',
@@ -397,7 +445,7 @@ describe('TreasuryKafkaMessageHandler', () => {
     const { handler, capacityDomainService } = createHandler(repository);
     const payload = {
       messageId: 'message-duplicate',
-      schemaVersion: 1,
+      schemaVersion: 2,
       eventType: TreasuryKafkaEventType.InvoiceRepaid,
       occurredAt: OCCURRED_AT,
       programId: 'program-1',

@@ -1,10 +1,12 @@
 import Hapi from '@hapi/hapi';
-import { ReservationStatus } from '../constants/capacity.js';
+import { CapacityEventType, ReservationStatus } from '../constants/capacity.js';
 import auth from '../plugins/auth.js';
 import errorHandler from '../plugins/error-handler.js';
 import {
+  countEvents,
   findBalance,
   findProgram,
+  findReservations,
   setupIntegrationDatabase,
 } from '../test/integration-db.js';
 import { failAction } from '../utils/validation.js';
@@ -39,6 +41,7 @@ const createServer = async () => {
       },
     },
   });
+  server.decorate('server', 'logger', { error() {} });
 
   try {
     await server.register([auth, errorHandler]);
@@ -72,7 +75,7 @@ describe('Capacity API integration', () => {
         payload: {
           externalId: PROGRAM_ID,
           currency: 'USD',
-          totalLimit: 1000,
+          totalLimit: '1000',
         },
       });
 
@@ -80,9 +83,9 @@ describe('Capacity API integration', () => {
       expect(createProgramResponse.result.capacity).toMatchObject({
         programId: PROGRAM_ID,
         currency: 'USD',
-        totalLimit: 1000,
-        reservedAmount: 0,
-        availableAmount: 1000,
+        totalLimit: '1000',
+        reservedAmount: '0',
+        availableAmount: '1000',
       });
 
       const createFxRateResponse = await injectAuthenticated(server, {
@@ -91,19 +94,20 @@ describe('Capacity API integration', () => {
         payload: {
           baseCurrency: 'EUR',
           quoteCurrency: 'USD',
-          rate: 1.2,
+          rate: '1',
           effectiveAt: '2026-07-02T11:00:00.000Z',
         },
       });
 
       expect(createFxRateResponse.statusCode).toBe(201);
+      expect(createFxRateResponse.result).toMatchObject({ rate: '1' });
 
       const reserveResponse = await injectAuthenticated(server, {
         method: 'POST',
         url: `/programs/${PROGRAM_ID}/reservations`,
         payload: {
           invoiceId: 'api-flow-invoice',
-          amount: 125,
+          amount: '10.075',
           currency: 'EUR',
         },
       });
@@ -113,20 +117,20 @@ describe('Capacity API integration', () => {
         reservation: {
           programId: PROGRAM_ID,
           invoiceId: 'api-flow-invoice',
-          invoiceAmount: 125,
+          invoiceAmount: '10.075',
           invoiceCurrency: 'EUR',
-          amount: 150,
+          amount: '10.08',
           currency: 'USD',
           fxRateId: createFxRateResponse.result.id,
           status: ReservationStatus.Reserved,
-          releasedAmount: 0,
+          releasedAmount: '0',
         },
         capacity: {
           programId: PROGRAM_ID,
           currency: 'USD',
-          totalLimit: 1000,
-          reservedAmount: 150,
-          availableAmount: 850,
+          totalLimit: '1000',
+          reservedAmount: '10.08',
+          availableAmount: '989.92',
         },
       });
 
@@ -139,9 +143,9 @@ describe('Capacity API integration', () => {
       expect(reservedCapacityResponse.result).toMatchObject({
         programId: PROGRAM_ID,
         currency: 'USD',
-        totalLimit: 1000,
-        reservedAmount: 150,
-        availableAmount: 850,
+        totalLimit: '1000',
+        reservedAmount: '10.08',
+        availableAmount: '989.92',
       });
 
       const releaseResponse = await injectAuthenticated(server, {
@@ -154,20 +158,20 @@ describe('Capacity API integration', () => {
         reservation: {
           programId: PROGRAM_ID,
           invoiceId: 'api-flow-invoice',
-          invoiceAmount: 125,
+          invoiceAmount: '10.075',
           invoiceCurrency: 'EUR',
-          amount: 150,
+          amount: '10.08',
           currency: 'USD',
           fxRateId: createFxRateResponse.result.id,
           status: ReservationStatus.Released,
-          releasedAmount: 150,
+          releasedAmount: '10.08',
         },
         capacity: {
           programId: PROGRAM_ID,
           currency: 'USD',
-          totalLimit: 1000,
-          reservedAmount: 0,
-          availableAmount: 1000,
+          totalLimit: '1000',
+          reservedAmount: '0',
+          availableAmount: '1000',
         },
       });
 
@@ -175,9 +179,111 @@ describe('Capacity API integration', () => {
       const balance = await findBalance(program.id);
 
       expect(balance).toMatchObject({
-        totalLimit: 1000,
-        reservedAmount: 0,
+        totalLimit: '1000',
+        reservedAmount: '0',
       });
+    } finally {
+      await server.stop();
+    }
+  });
+
+  test('rejects JSON numeric monetary values', async () => {
+    const server = await createServer();
+
+    try {
+      const requests = [
+        {
+          method: 'POST',
+          url: '/programs',
+          payload: {
+            externalId: 'api-numeric-money-program',
+            currency: 'USD',
+            totalLimit: 1000,
+          },
+        },
+        {
+          method: 'POST',
+          url: '/fx-rates',
+          payload: {
+            baseCurrency: 'EUR',
+            quoteCurrency: 'USD',
+            rate: 1.2,
+            effectiveAt: '2026-07-02T11:00:00.000Z',
+          },
+        },
+        {
+          method: 'POST',
+          url: '/programs/missing-program/reservations',
+          payload: {
+            invoiceId: 'api-numeric-money-invoice',
+            amount: 10.075,
+            currency: 'EUR',
+          },
+        },
+      ];
+
+      for (const options of requests) {
+        const response = await injectAuthenticated(server, options);
+
+        expect(response.statusCode).toBe(400);
+      }
+      expect(await findProgram('api-numeric-money-program')).toBeUndefined();
+    } finally {
+      await server.stop();
+    }
+  });
+
+  test('returns 422 for zero-after-conversion without database side effects', async () => {
+    const server = await createServer();
+    const programId = 'api-zero-after-conversion-program';
+
+    try {
+      await injectAuthenticated(server, {
+        method: 'POST',
+        url: '/programs',
+        payload: {
+          externalId: programId,
+          currency: 'USD',
+          totalLimit: '1',
+        },
+      });
+      await injectAuthenticated(server, {
+        method: 'POST',
+        url: '/fx-rates',
+        payload: {
+          baseCurrency: 'EUR',
+          quoteCurrency: 'USD',
+          rate: '1',
+          effectiveAt: '2026-07-02T11:00:00.000Z',
+        },
+      });
+
+      const response = await injectAuthenticated(server, {
+        method: 'POST',
+        url: `/programs/${programId}/reservations`,
+        payload: {
+          invoiceId: 'api-zero-after-conversion-invoice',
+          amount: '0.0049',
+          currency: 'EUR',
+        },
+      });
+
+      expect(response.statusCode).toBe(422);
+      expect(response.result).toMatchObject({
+        statusCode: 422,
+        message: 'Converted reservation amount rounds to zero',
+        data: {
+          invoiceAmount: '0.0049',
+          invoiceCurrency: 'EUR',
+          convertedAmount: '0',
+          currency: 'USD',
+        },
+      });
+
+      const program = await findProgram(programId);
+      expect(await findBalance(program.id)).toMatchObject({ totalLimit: '1', reservedAmount: '0' });
+      expect(await findReservations(program.id)).toHaveLength(0);
+      expect(await countEvents(program.id, CapacityEventType.ReservationCreated)).toBe(0);
     } finally {
       await server.stop();
     }

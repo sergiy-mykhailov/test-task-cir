@@ -11,6 +11,7 @@ Program Capacity & Invoice Reservation is a backend service for tracking financi
 - [`docs/architecture/capacity-core.md`](./architecture/capacity-core.md) - core capacity tables, reservation and release endpoint contracts, and domain assumptions.
 - [`docs/architecture/capacity-safety.md`](./architecture/capacity-safety.md) - transaction, duplicate operation, and concurrency behavior for the capacity flow.
 - [`docs/architecture/capacity-currency.md`](./architecture/capacity-currency.md) - local FX rates and cross-currency reservation conversion behavior.
+- [`docs/architecture/monetary-precision.md`](./architecture/monetary-precision.md) - exact decimal representation, arithmetic, rounding, API values, and Kafka monetary-field contracts.
 - [`docs/architecture/api-authentication.md`](./architecture/api-authentication.md) - service-to-service API token authentication and the unauthenticated health-check exception.
 - [`docs/architecture/kafka-treasury-ingestion.md`](./architecture/kafka-treasury-ingestion.md) - Kafka treasury event ingestion contract, including local broker setup, message schema, idempotency, and producer scripts.
 - [`docs/architecture/kafka-bulk-reconciliation.md`](./architecture/kafka-bulk-reconciliation.md) - Kafka bulk reconciliation snapshot contract for updating capacity balance projections without rewriting reservation history.

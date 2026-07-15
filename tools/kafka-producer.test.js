@@ -4,6 +4,7 @@ import { createKafkaLogPolicy } from '../app/kafka/log-policy.js';
 import { prepareTreasuryTopic } from '../app/kafka/topic-readiness.js';
 import {
   buildProgramReconciledMessage,
+  buildReservationApprovedMessage,
   publishTreasuryMessage,
 } from './kafka-producer.js';
 
@@ -18,12 +19,12 @@ const TOPIC_CONFIG = {
 };
 const PAYLOAD = {
   messageId: 'treasury-msg-1',
-  schemaVersion: 1,
+  schemaVersion: 2,
   eventType: 'RESERVATION_APPROVED',
   occurredAt: '2026-07-02T12:00:00.000Z',
   programId: 'program-1',
   invoiceId: 'invoice-1',
-  amount: 100,
+  amount: '100',
   currency: 'EUR',
 };
 const ENV_KEYS = [
@@ -31,6 +32,8 @@ const ENV_KEYS = [
   'KAFKA_CLIENT_ID',
   'KAFKA_TREASURY_EVENTS_TOPIC',
   'PROGRAM_ID',
+  'INVOICE_ID',
+  'AMOUNT',
   'MESSAGE_ID',
   'OCCURRED_AT',
   'TOTAL_LIMIT',
@@ -138,13 +141,13 @@ describe('Kafka producer scripts', () => {
 
     expect(buildProgramReconciledMessage()).toEqual({
       messageId: 'treasury-recon-1',
-      schemaVersion: 1,
+      schemaVersion: 2,
       eventType: 'PROGRAM_RECONCILED',
       occurredAt: '2026-07-02T14:00:00.000Z',
       programId: 'program-1',
       currency: 'USD',
-      totalLimit: 10000000,
-      reservedAmount: 0,
+      totalLimit: '10000000',
+      reservedAmount: '0',
     });
   });
 
@@ -155,7 +158,31 @@ describe('Kafka producer scripts', () => {
     process.env.CURRENCY = 'USD';
 
     expect(() => buildProgramReconciledMessage())
-      .toThrow('RESERVED_AMOUNT must be a non-negative number.');
+      .toThrow('RESERVED_AMOUNT must be a non-negative decimal string.');
+  });
+
+  test('preserves validated reservation amounts as schema version 2 decimal strings', () => {
+    process.env.PROGRAM_ID = 'program-1';
+    process.env.INVOICE_ID = 'invoice-1';
+    process.env.MESSAGE_ID = 'treasury-reservation-1';
+    process.env.OCCURRED_AT = '2026-07-02T14:00:00.000Z';
+    process.env.AMOUNT = '10.075';
+    process.env.CURRENCY = 'EUR';
+
+    expect(buildReservationApprovedMessage()).toMatchObject({
+      schemaVersion: 2,
+      amount: '10.075',
+    });
+  });
+
+  test('rejects non-contract decimal syntax in producer environment values', () => {
+    process.env.PROGRAM_ID = 'program-1';
+    process.env.INVOICE_ID = 'invoice-1';
+    process.env.AMOUNT = '1e3';
+    process.env.CURRENCY = 'EUR';
+
+    expect(() => buildReservationApprovedMessage())
+      .toThrow('AMOUNT must be a positive decimal string.');
   });
 
   test('publishes to an existing topic without creating it', async () => {

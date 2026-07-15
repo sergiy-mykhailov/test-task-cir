@@ -1,4 +1,8 @@
 import BaseModel from './base-model.js';
+import {
+  DECIMAL_STRING_MAX_LENGTH,
+  POSITIVE_DECIMAL_STRING_PATTERN,
+} from '../utils/decimal.js';
 
 export default class FxRates extends BaseModel {
   static get tableName() {
@@ -14,7 +18,11 @@ export default class FxRates extends BaseModel {
         id: { type: 'integer', minimum: 1 },
         baseCurrency: { type: 'string', minLength: 3, maxLength: 3 },
         quoteCurrency: { type: 'string', minLength: 3, maxLength: 3 },
-        rate: { type: 'number', exclusiveMinimum: 0 },
+        rate: {
+          type: 'string',
+          maxLength: DECIMAL_STRING_MAX_LENGTH,
+          pattern: POSITIVE_DECIMAL_STRING_PATTERN.source,
+        },
         effectiveAt: { type: 'string', format: 'date-time' },
         createdAt: { type: 'string', format: 'date-time' },
       },

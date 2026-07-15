@@ -2,7 +2,7 @@
 
 This document defines the core Program Capacity and Invoice Reservation model.
 
-Concurrency and duplicate operation hardening for this model is defined separately in [`capacity-safety.md`](./capacity-safety.md). Cross-currency invoice reservation handling is defined separately in [`capacity-currency.md`](./capacity-currency.md).
+Concurrency and duplicate operation hardening for this model is defined separately in [`capacity-safety.md`](./capacity-safety.md). Cross-currency invoice reservation handling is defined separately in [`capacity-currency.md`](./capacity-currency.md). All monetary API fields and domain arithmetic follow [`monetary-precision.md`](./monetary-precision.md).
 
 ## Scope
 
@@ -90,7 +90,7 @@ Creates a financing program and its initial capacity balance for local/API-drive
 Request fields:
 - `externalId`
 - `currency`
-- `totalLimit`
+- `totalLimit` - positive decimal string.
 
 Rules:
 - `externalId` must be unique.
@@ -108,9 +108,9 @@ Returns current capacity for a program.
 Response fields:
 - `programId`
 - `currency`
-- `totalLimit`
-- `reservedAmount`
-- `availableAmount`
+- `totalLimit` - decimal string.
+- `reservedAmount` - decimal string.
+- `availableAmount` - decimal string.
 - `updatedAt`
 
 ### `POST /programs/{programId}/reservations`
@@ -119,7 +119,7 @@ Creates a reservation for an external invoice.
 
 Request fields:
 - `invoiceId`
-- `amount`
+- `amount` - positive decimal string.
 - `currency`
 
 Rules:
@@ -149,6 +149,6 @@ Use the service's established error response format.
 - `400 Bad Request` - request validation failed, including missing required fields, non-positive amount, or malformed identifiers.
 - `404 Not Found` - program or reservation for the requested invoice does not exist.
 - `409 Conflict` - duplicate program `external_id`, insufficient available capacity, duplicate reservation for the same `(program_id, invoice_id)`, or release requested for a reservation that is already `RELEASED`.
-- `422 Unprocessable Entity` - cross-currency reservation has no usable direct FX rate.
+- `422 Unprocessable Entity` - cross-currency reservation has no usable direct FX rate or its converted amount rounds to zero in program currency.
 
 Authentication failures are defined in [`api-authentication.md`](./api-authentication.md).

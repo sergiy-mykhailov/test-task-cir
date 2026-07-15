@@ -1,8 +1,6 @@
 // Shared low-level helpers for runtime parsing, value normalization, and async timing.
 export const timeout = (duration = 1001) => new Promise((res) => setTimeout(() => res(true), duration));
 
-export const toAmount = (value) => Number(value);
-
 export const parseBoolean = (value, defaultValue = false) => {
   if (value === undefined) {
     return defaultValue;

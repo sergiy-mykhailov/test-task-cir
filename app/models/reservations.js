@@ -1,4 +1,9 @@
 import { ReservationStatus } from '../constants/capacity.js';
+import {
+  DECIMAL_STRING_MAX_LENGTH,
+  DECIMAL_STRING_PATTERN,
+  POSITIVE_DECIMAL_STRING_PATTERN,
+} from '../utils/decimal.js';
 import BaseModel from './base-model.js';
 
 export default class Reservations extends BaseModel {
@@ -15,13 +20,25 @@ export default class Reservations extends BaseModel {
         id: { type: 'integer', minimum: 1 },
         programId: { type: 'integer', minimum: 1 },
         invoiceId: { type: 'string', minLength: 1, maxLength: 255 },
-        invoiceAmount: { type: 'number', exclusiveMinimum: 0 },
+        invoiceAmount: {
+          type: 'string',
+          maxLength: DECIMAL_STRING_MAX_LENGTH,
+          pattern: POSITIVE_DECIMAL_STRING_PATTERN.source,
+        },
         invoiceCurrency: { type: 'string', minLength: 3, maxLength: 3 },
-        amount: { type: 'number', exclusiveMinimum: 0 },
+        amount: {
+          type: 'string',
+          maxLength: DECIMAL_STRING_MAX_LENGTH,
+          pattern: POSITIVE_DECIMAL_STRING_PATTERN.source,
+        },
         currency: { type: 'string', minLength: 3, maxLength: 3 },
         fxRateId: { type: ['integer', 'null'], minimum: 1 },
         status: { type: 'string', enum: Object.values(ReservationStatus) },
-        releasedAmount: { type: 'number', minimum: 0 },
+        releasedAmount: {
+          type: 'string',
+          maxLength: DECIMAL_STRING_MAX_LENGTH,
+          pattern: DECIMAL_STRING_PATTERN.source,
+        },
         reservedAt: { type: 'string', format: 'date-time' },
         releasedAt: { type: ['string', 'null'], format: 'date-time' },
         createdAt: { type: 'string', format: 'date-time' },

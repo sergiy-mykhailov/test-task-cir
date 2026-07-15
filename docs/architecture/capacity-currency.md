@@ -8,6 +8,8 @@ Invoices may be reserved when invoice currency differs from the program currency
 
 External FX providers are out of scope. FX rates are managed locally in the service through the `fx_rates` table and a minimal local API.
 
+FX rates, monetary API fields, arithmetic, and serialization follow [`monetary-precision.md`](./monetary-precision.md).
+
 ## Assumptions
 
 - FX rates are managed locally in the service.
@@ -52,7 +54,7 @@ Creates a locally managed FX rate for local operation.
 Request fields:
 - `baseCurrency`
 - `quoteCurrency`
-- `rate`
+- `rate` - positive decimal string.
 - `effectiveAt`
 
 Rules:
@@ -66,7 +68,7 @@ Response fields:
 - `id`
 - `baseCurrency`
 - `quoteCurrency`
-- `rate`
+- `rate` - decimal string.
 - `effectiveAt`
 - `createdAt`
 
@@ -77,7 +79,7 @@ This endpoint requires the same API authentication as other public business endp
 `POST /programs/{programId}/reservations` keeps the existing request shape:
 
 - `invoiceId`
-- `amount`
+- `amount` - positive decimal string.
 - `currency`
 
 Request `amount` and `currency` represent the original invoice amount and invoice currency.
@@ -86,8 +88,10 @@ Rules:
 - If request `currency` equals the program currency, store `invoice_amount = amount`, `invoice_currency = currency`, `amount = amount`, `currency = program.currency`, and `fx_rate_id = null`.
 - If request `currency` differs from the program currency, select the latest `fx_rates` row where `base_currency = request.currency`, `quote_currency = program.currency`, and `effective_at <= reservation timestamp`.
 - If no usable direct FX rate exists, return `422 Unprocessable Entity`.
-- Converted reserved amount is `invoice_amount * rate`.
-- Round the converted reserved amount to two decimal places before capacity comparison, persistence, event creation, and response formatting.
+- Converted reserved amount is exact `invoice_amount * rate` through `big.js`.
+- Round the converted reserved amount once to two decimal places with `Big.roundHalfUp` before capacity comparison, persistence, event creation, and response formatting.
+- If the rounded converted amount equals zero, return `422 Unprocessable Entity` before the capacity comparison. Do not create a reservation or capacity event and do not update the balance.
+- The zero-after-conversion error data contains the decimal-string `invoiceAmount` and `convertedAmount` plus `invoiceCurrency` and program `currency`.
 - Capacity checks, balance updates, `capacity_events.amount`, and release use the converted `amount` in program currency.
 - Release uses the stored reservation `amount`; it does not look up a new FX rate.
 
@@ -98,9 +102,9 @@ When multiple rates match, select the newest by `effective_at desc, id desc`.
 Reservation responses should include both original invoice fields and reserved program-currency fields:
 
 - `invoiceId`
-- `invoiceAmount`
+- `invoiceAmount` - decimal string.
 - `invoiceCurrency`
-- `amount`
+- `amount` - decimal string.
 - `currency`
 - `fxRateId`
 - `status`
@@ -114,4 +118,4 @@ Reservation responses should include both original invoice fields and reserved p
 - `400 Bad Request` - malformed currency, non-positive amount or rate, malformed timestamp, or missing required fields.
 - `404 Not Found` - program or reservation does not exist.
 - `409 Conflict` - duplicate reservation, insufficient converted capacity, duplicate FX rate timestamp, or already released reservation.
-- `422 Unprocessable Entity` - cross-currency reservation has no usable direct FX rate.
+- `422 Unprocessable Entity` - cross-currency reservation has no usable direct FX rate or its converted amount rounds to zero in program currency.

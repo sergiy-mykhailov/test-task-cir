@@ -4,6 +4,8 @@ This document defines the contract for periodic treasury bulk reconciliation sna
 
 Incremental reservation and repayment messages are defined in [`kafka-treasury-ingestion.md`](./kafka-treasury-ingestion.md).
 
+Monetary message fields and reconciliation comparisons follow [`monetary-precision.md`](./monetary-precision.md).
+
 ## Scope
 
 The existing `treasury.capacity.events` Kafka topic includes a full-state reconciliation message for one financing program.
@@ -24,20 +26,20 @@ Topic: `treasury.capacity.events`.
 
 Message key: `programId`.
 
-Message value is JSON with `schemaVersion = 1`.
+Message value is JSON with `schemaVersion = 2`.
 
 ### Program Reconciled
 
 ```json
 {
   "messageId": "treasury-recon-1",
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "eventType": "PROGRAM_RECONCILED",
   "occurredAt": "2026-07-02T14:00:00.000Z",
   "programId": "p-1",
   "currency": "USD",
-  "totalLimit": 10000000,
-  "reservedAmount": 1250000
+  "totalLimit": "10000000",
+  "reservedAmount": "1250000"
 }
 ```
 
@@ -46,8 +48,8 @@ Rules:
 - `messageId` is required and must be globally unique from the treasury system.
 - `programId` maps to `programs.external_id`.
 - `currency` must match the existing program currency.
-- `totalLimit` must be positive.
-- `reservedAmount` must be non-negative.
+- `totalLimit` must be a positive decimal string.
+- `reservedAmount` must be a non-negative decimal string.
 - `reservedAmount` must not exceed `totalLimit`.
 - `occurredAt` is the treasury snapshot timestamp used for the balance update and audit event.
 

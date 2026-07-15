@@ -6,7 +6,17 @@ import {
 import { HttpStatusCode } from '../constants/http.js';
 import CapacityRepository from '../repositories/capacity.js';
 import { throwError } from '../utils/errors.js';
-import { toAmount, toTimestamp } from '../utils/common.js';
+import { toTimestamp } from '../utils/common.js';
+import {
+  addDecimals,
+  isDecimalGreaterThan,
+  isDecimalString,
+  multiplyDecimals,
+  parseDecimal,
+  roundMoney,
+  serializeDecimal,
+  subtractDecimals,
+} from '../utils/decimal.js';
 
 export default class CapacityService {
   constructor({
@@ -32,6 +42,7 @@ export default class CapacityService {
       }
 
       const totalLimit = this.#getValidatedAmount(payload.totalLimit, 'totalLimit');
+      const serializedTotalLimit = serializeDecimal(totalLimit);
       const occurredAt = toTimestamp(this.now());
       const program = await this.repository.createProgram({
         externalId: payload.externalId,
@@ -41,8 +52,8 @@ export default class CapacityService {
       }, trx);
       const balance = await this.repository.createBalance({
         programId: program.id,
-        totalLimit,
-        reservedAmount: 0,
+        totalLimit: serializedTotalLimit,
+        reservedAmount: '0',
         updatedAt: occurredAt,
       }, trx);
 
@@ -52,7 +63,7 @@ export default class CapacityService {
         eventType: CapacityEventType.ProgramCreated,
         source: CapacityEventSource.Api,
         invoiceId: null,
-        amount: totalLimit,
+        amount: serializedTotalLimit,
         currency: program.currency,
         occurredAt,
         createdAt: occurredAt,
@@ -75,7 +86,7 @@ export default class CapacityService {
         );
       }
 
-      const rate = this.#getValidatedAmount(payload.rate, 'rate');
+      const rate = serializeDecimal(this.#getValidatedAmount(payload.rate, 'rate'));
       const effectiveAt = toTimestamp(payload.effectiveAt);
       const existingFxRate = await this.repository.findFxRateByPairAndEffectiveAt(
         payload.baseCurrency,
@@ -140,33 +151,39 @@ export default class CapacityService {
         occurredAt: reservationOccurredAt,
         trx,
       });
-      const availableAmount = balance.totalLimit - balance.reservedAmount;
+      const availableAmount = subtractDecimals(balance.totalLimit, balance.reservedAmount);
 
-      if (amount > availableAmount) {
+      if (isDecimalGreaterThan(amount, availableAmount)) {
         throwError(
           'Insufficient available capacity',
           HttpStatusCode.Conflict,
-          { availableAmount, requestedAmount: amount },
+          {
+            availableAmount: serializeDecimal(availableAmount),
+            requestedAmount: serializeDecimal(amount),
+          },
         );
       }
+
+      const serializedInvoiceAmount = serializeDecimal(invoiceAmount);
+      const serializedAmount = serializeDecimal(amount);
 
       const reservation = await this.repository.createReservation({
         programId: program.id,
         invoiceId: payload.invoiceId,
-        invoiceAmount,
+        invoiceAmount: serializedInvoiceAmount,
         invoiceCurrency: payload.currency,
-        amount,
+        amount: serializedAmount,
         currency: program.currency,
         fxRateId,
         status: ReservationStatus.Reserved,
-        releasedAmount: 0,
+        releasedAmount: '0',
         reservedAt: reservationOccurredAt,
         createdAt: reservationOccurredAt,
         updatedAt: reservationOccurredAt,
       }, trx);
 
       const updatedBalance = await this.repository.updateBalance(program.id, {
-        reservedAmount: balance.reservedAmount + amount,
+        reservedAmount: serializeDecimal(addDecimals(balance.reservedAmount, amount)),
         updatedAt: reservationOccurredAt,
       }, trx);
 
@@ -176,7 +193,7 @@ export default class CapacityService {
         eventType: CapacityEventType.ReservationCreated,
         source,
         invoiceId: payload.invoiceId,
-        amount,
+        amount: serializedAmount,
         currency: program.currency,
         occurredAt: reservationOccurredAt,
         createdAt: reservationOccurredAt,
@@ -217,16 +234,17 @@ export default class CapacityService {
         );
       }
 
-      const amount = reservation.amount;
+      const amount = parseDecimal(reservation.amount);
+      const serializedAmount = serializeDecimal(amount);
       const releaseOccurredAt = toTimestamp(occurredAt || this.now());
       const updatedReservation = await this.repository.updateReservation(reservation.id, {
         status: ReservationStatus.Released,
-        releasedAmount: amount,
+        releasedAmount: serializedAmount,
         releasedAt: releaseOccurredAt,
         updatedAt: releaseOccurredAt,
       }, trx);
       const updatedBalance = await this.repository.updateBalance(program.id, {
-        reservedAmount: balance.reservedAmount - amount,
+        reservedAmount: serializeDecimal(subtractDecimals(balance.reservedAmount, amount)),
         updatedAt: releaseOccurredAt,
       }, trx);
 
@@ -236,7 +254,7 @@ export default class CapacityService {
         eventType: CapacityEventType.ReservationReleased,
         source,
         invoiceId: reservation.invoiceId,
-        amount,
+        amount: serializedAmount,
         currency: program.currency,
         occurredAt: releaseOccurredAt,
         createdAt: releaseOccurredAt,
@@ -268,18 +286,24 @@ export default class CapacityService {
         );
       }
 
-      if (reservedAmount > totalLimit) {
+      if (isDecimalGreaterThan(reservedAmount, totalLimit)) {
         throwError(
           'reservedAmount must not exceed totalLimit',
           HttpStatusCode.BadRequest,
-          { totalLimit, reservedAmount },
+          {
+            totalLimit: serializeDecimal(totalLimit),
+            reservedAmount: serializeDecimal(reservedAmount),
+          },
         );
       }
 
+      const serializedTotalLimit = serializeDecimal(totalLimit);
+      const serializedReservedAmount = serializeDecimal(reservedAmount);
+
       const reconciliationOccurredAt = toTimestamp(occurredAt || payload.occurredAt || this.now());
       const updatedBalance = await this.repository.updateBalance(program.id, {
-        totalLimit,
-        reservedAmount,
+        totalLimit: serializedTotalLimit,
+        reservedAmount: serializedReservedAmount,
         updatedAt: reconciliationOccurredAt,
       }, trx);
 
@@ -289,7 +313,7 @@ export default class CapacityService {
         eventType: CapacityEventType.ReconciliationApplied,
         source,
         invoiceId: null,
-        amount: reservedAmount,
+        amount: serializedReservedAmount,
         currency: program.currency,
         occurredAt: reconciliationOccurredAt,
         createdAt: reconciliationOccurredAt,
@@ -326,23 +350,25 @@ export default class CapacityService {
   }
 
   #getValidatedAmount(amount, fieldName = 'amount') {
-    const numericAmount = toAmount(amount);
-
-    if (!Number.isFinite(numericAmount) || numericAmount <= 0) {
-      throwError(`${fieldName} must be positive`, HttpStatusCode.BadRequest, { [fieldName]: amount });
+    if (!isDecimalString(amount)) {
+      throwError(`${fieldName} must be positive`, HttpStatusCode.BadRequest);
     }
 
-    return numericAmount;
+    const decimalAmount = parseDecimal(amount);
+
+    if (!isDecimalGreaterThan(decimalAmount, '0')) {
+      throwError(`${fieldName} must be positive`, HttpStatusCode.BadRequest);
+    }
+
+    return decimalAmount;
   }
 
   #getValidatedNonNegativeAmount(amount, fieldName) {
-    const numericAmount = toAmount(amount);
-
-    if (!Number.isFinite(numericAmount) || numericAmount < 0) {
-      throwError(`${fieldName} must be non-negative`, HttpStatusCode.BadRequest, { [fieldName]: amount });
+    if (!isDecimalString(amount)) {
+      throwError(`${fieldName} must be non-negative`, HttpStatusCode.BadRequest);
     }
 
-    return numericAmount;
+    return parseDecimal(amount);
   }
 
   async #resolveReservationAmount({
@@ -369,14 +395,26 @@ export default class CapacityService {
       );
     }
 
+    // Convert exactly and round once before comparison, persistence, events, and responses.
+    const convertedAmount = roundMoney(multiplyDecimals(invoiceAmount, fxRate.rate));
+
+    if (!isDecimalGreaterThan(convertedAmount, '0')) {
+      throwError(
+        'Converted reservation amount rounds to zero',
+        HttpStatusCode.UnprocessableEntity,
+        {
+          invoiceAmount: serializeDecimal(invoiceAmount),
+          invoiceCurrency,
+          convertedAmount: serializeDecimal(convertedAmount),
+          currency: program.currency,
+        },
+      );
+    }
+
     return {
-      amount: this.#roundMoney(invoiceAmount * fxRate.rate),
+      amount: convertedAmount,
       fxRateId: fxRate.id,
     };
-  }
-
-  #roundMoney(amount) {
-    return Math.round((amount + Number.EPSILON) * 100) / 100;
   }
 
   #buildProgramResponse(program) {
@@ -393,9 +431,9 @@ export default class CapacityService {
     return {
       programId: program.externalId,
       currency: program.currency,
-      totalLimit: balance.totalLimit,
-      reservedAmount: balance.reservedAmount,
-      availableAmount: balance.totalLimit - balance.reservedAmount,
+      totalLimit: serializeDecimal(balance.totalLimit),
+      reservedAmount: serializeDecimal(balance.reservedAmount),
+      availableAmount: serializeDecimal(subtractDecimals(balance.totalLimit, balance.reservedAmount)),
       updatedAt: toTimestamp(balance.updatedAt),
     };
   }
@@ -405,13 +443,13 @@ export default class CapacityService {
       id: reservation.id,
       programId: program.externalId,
       invoiceId: reservation.invoiceId,
-      invoiceAmount: reservation.invoiceAmount ?? reservation.amount,
+      invoiceAmount: serializeDecimal(reservation.invoiceAmount ?? reservation.amount),
       invoiceCurrency: reservation.invoiceCurrency ?? reservation.currency,
-      amount: reservation.amount,
+      amount: serializeDecimal(reservation.amount),
       currency: reservation.currency,
       fxRateId: reservation.fxRateId ?? null,
       status: reservation.status,
-      releasedAmount: reservation.releasedAmount,
+      releasedAmount: serializeDecimal(reservation.releasedAmount),
       reservedAt: toTimestamp(reservation.reservedAt),
       releasedAt: toTimestamp(reservation.releasedAt),
       createdAt: toTimestamp(reservation.createdAt),
@@ -424,7 +462,7 @@ export default class CapacityService {
       id: fxRate.id,
       baseCurrency: fxRate.baseCurrency,
       quoteCurrency: fxRate.quoteCurrency,
-      rate: fxRate.rate,
+      rate: serializeDecimal(fxRate.rate),
       effectiveAt: toTimestamp(fxRate.effectiveAt),
       createdAt: toTimestamp(fxRate.createdAt),
     };

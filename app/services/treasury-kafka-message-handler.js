@@ -9,6 +9,11 @@ import {
   isNonEmptyString,
   toTimestamp,
 } from '../utils/common.js';
+import {
+  isDecimalGreaterThan,
+  isDecimalString,
+  isPositiveDecimalString,
+} from '../utils/decimal.js';
 import { capacityService } from './capacity.js';
 
 export const TreasuryKafkaHandlerResult = Object.freeze({
@@ -17,7 +22,7 @@ export const TreasuryKafkaHandlerResult = Object.freeze({
   Duplicate: 'DUPLICATE',
 });
 
-const SUPPORTED_SCHEMA_VERSION = 1;
+const SUPPORTED_SCHEMA_VERSION = 2;
 const CURRENCY_PATTERN = /^[A-Z]{3}$/;
 
 export default class TreasuryKafkaMessageHandler {
@@ -211,7 +216,7 @@ export default class TreasuryKafkaMessageHandler {
     }
 
     if (payload.schemaVersion !== SUPPORTED_SCHEMA_VERSION) {
-      return 'schemaVersion must be 1';
+      return 'schemaVersion must be 2';
     }
 
     if (!Object.values(TreasuryKafkaEventType).includes(payload.eventType)) {
@@ -231,7 +236,7 @@ export default class TreasuryKafkaMessageHandler {
         return 'invoiceId is required';
       }
 
-      if (!Number.isFinite(Number(payload.amount)) || Number(payload.amount) <= 0) {
+      if (!isPositiveDecimalString(payload.amount)) {
         return 'amount must be positive';
       }
 
@@ -249,15 +254,15 @@ export default class TreasuryKafkaMessageHandler {
         return 'currency must be an uppercase three-letter code';
       }
 
-      if (!Number.isFinite(Number(payload.totalLimit)) || Number(payload.totalLimit) <= 0) {
+      if (!isPositiveDecimalString(payload.totalLimit)) {
         return 'totalLimit must be positive';
       }
 
-      if (!Number.isFinite(Number(payload.reservedAmount)) || Number(payload.reservedAmount) < 0) {
+      if (!isDecimalString(payload.reservedAmount)) {
         return 'reservedAmount must be non-negative';
       }
 
-      if (Number(payload.reservedAmount) > Number(payload.totalLimit)) {
+      if (isDecimalGreaterThan(payload.reservedAmount, payload.totalLimit)) {
         return 'reservedAmount must not exceed totalLimit';
       }
     }

@@ -10,6 +10,8 @@ HTTP `Idempotency-Key` headers, idempotency-key storage, and response replay are
 
 Kafka message idempotency and reconciliation replay behavior are handled through the Kafka inbox contract defined in [`kafka-treasury-ingestion.md`](./kafka-treasury-ingestion.md).
 
+Capacity comparisons and balance arithmetic follow the exact decimal contract in [`monetary-precision.md`](./monetary-precision.md).
+
 ## Duplicate Operation Contract
 
 - A reservation is uniquely identified by `(program_id, invoice_id)`.
@@ -25,11 +27,12 @@ Reservation creation should run in a single database transaction:
 1. Resolve the program by `programs.external_id`.
 2. Lock the matching `program_capacity_balances` row for update.
 3. Check whether a reservation already exists for `(program_id, invoice_id)`.
-4. Validate available capacity using the locked balance row.
-5. Insert the reservation.
-6. Increase `reserved_amount`.
-7. Insert the `RESERVATION_CREATED` capacity event.
-8. Commit the transaction.
+4. Resolve the capacity-affecting amount and reject a cross-currency conversion that rounds to zero.
+5. Validate available capacity using the locked balance row.
+6. Insert the reservation.
+7. Increase `reserved_amount`.
+8. Insert the `RESERVATION_CREATED` capacity event.
+9. Commit the transaction.
 
 Reservation release should run in a single database transaction:
 
@@ -43,7 +46,9 @@ Reservation release should run in a single database transaction:
 8. Insert the `RESERVATION_RELEASED` capacity event.
 9. Commit the transaction.
 
-Both flows should lock rows in a consistent order: program lookup, capacity balance row, then reservation row when one exists. Balance arithmetic must be committed with the reservation or release state change; partial updates are not acceptable.
+Both flows should lock rows in a consistent order: program lookup, capacity balance row, then reservation row when one exists. Balance arithmetic must use exact decimal operations and be committed with the reservation or release state change; partial updates are not acceptable.
+
+A zero-after-conversion rejection returns `422 Unprocessable Entity` without inserting a reservation or capacity event and without changing `reserved_amount`.
 
 ## Concurrent Request Behavior
 

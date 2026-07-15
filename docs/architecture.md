@@ -5,6 +5,7 @@
 - [`capacity-core.md`](./architecture/capacity-core.md) - core program capacity tables, reservation/release API contracts, and domain assumptions.
 - [`capacity-safety.md`](./architecture/capacity-safety.md) - transaction, duplicate operation, and concurrent capacity protection contract.
 - [`capacity-currency.md`](./architecture/capacity-currency.md) - local FX rate storage and cross-currency reservation conversion contract.
+- [`monetary-precision.md`](./architecture/monetary-precision.md) - exact decimal representation, arithmetic, rounding, and external value contracts.
 
 ## Integrations
 

@@ -4,6 +4,8 @@ This document defines the contract for consuming capacity events from the extern
 
 Bulk reconciliation snapshots use the same Kafka topic and are defined separately in [`kafka-bulk-reconciliation.md`](./kafka-bulk-reconciliation.md).
 
+Monetary message fields and domain arithmetic follow [`monetary-precision.md`](./monetary-precision.md).
+
 ## Integration Boundaries
 
 Kafka treasury ingestion covers:
@@ -83,19 +85,19 @@ Message key: `programId`.
 
 Using `programId` as the key keeps messages for the same financing program in one Kafka partition, preserving order for that program while still allowing different programs to be processed independently when the topic has multiple partitions.
 
-Message value is JSON with `schemaVersion = 1`.
+Message value is JSON with `schemaVersion = 2`. Version 1 messages are rejected without capacity mutation because their monetary fields use the retired JSON-number contract.
 
 ### Reservation Approved
 
 ```json
 {
   "messageId": "treasury-msg-1",
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "eventType": "RESERVATION_APPROVED",
   "occurredAt": "2026-07-02T12:00:00.000Z",
   "programId": "p-1",
   "invoiceId": "i-1",
-  "amount": 1000,
+  "amount": "1000",
   "currency": "EUR"
 }
 ```
@@ -105,8 +107,9 @@ Rules:
 - `messageId` is required and must be globally unique from the treasury system.
 - `programId` maps to `programs.external_id`.
 - `invoiceId` maps to `reservations.invoice_id`.
-- `amount` and `currency` are the invoice amount and invoice currency.
+- `amount` is a positive decimal string and `currency` is the invoice currency.
 - The handler must create a reservation using existing currency conversion behavior.
+- If the converted amount rounds to zero in program currency, the domain returns `422 Unprocessable Entity`; the handler records the message as terminally `REJECTED` without creating a reservation or capacity event and without changing the balance.
 - The resulting `capacity_events` row uses `event_type = RESERVATION_CREATED` and `source = KAFKA_TREASURY`.
 
 ### Invoice Repaid
@@ -114,7 +117,7 @@ Rules:
 ```json
 {
   "messageId": "treasury-msg-2",
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "eventType": "INVOICE_REPAID",
   "occurredAt": "2026-07-02T13:00:00.000Z",
   "programId": "p-1",
@@ -192,7 +195,7 @@ For retryable infrastructure errors, the handler should throw so the Kafka offse
 
 Terminal business-invalid Kafka messages are structurally valid treasury messages that cannot be applied because current domain state rejects them with a Boom `4xx` error.
 
-Reservation approval messages are terminal when the capacity domain rejects the reservation because of state or business validation, such as a missing FX rate, duplicate invoice, unknown program, or insufficient capacity. The service records one `treasury_kafka_messages` row with `status = REJECTED`, stores a concise failure reason, creates no `capacity_events` row, creates no reservation, leaves the capacity balance unchanged, and returns a rejected handler result without throwing.
+Reservation approval messages are terminal when the capacity domain rejects the reservation because of state or business validation, such as a missing FX rate, a converted amount that rounds to zero, duplicate invoice, unknown program, or insufficient capacity. The service records one `treasury_kafka_messages` row with `status = REJECTED`, stores a concise failure reason, creates no `capacity_events` row, creates no reservation, leaves the capacity balance unchanged, and returns a rejected handler result without throwing.
 
 Invoice repayment messages are terminal when the capacity domain rejects the release because the reservation is missing or already released. The service records one `treasury_kafka_messages` row with `status = REJECTED`, stores a concise failure reason, creates no release event, leaves reservation and capacity state unchanged, and returns a rejected handler result without throwing.
 
